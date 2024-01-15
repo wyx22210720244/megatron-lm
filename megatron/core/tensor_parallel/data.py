@@ -88,6 +88,9 @@ def broadcast_data(keys, data, datatype):
         flatten_data = torch.empty(total_numel, device=torch.cuda.current_device(), dtype=datatype)
 
     # Broadcast
+    # tensor：要广播的张量。如果当前进程是源进程，则会发送这个张量的内容到其他所有进程。如果当前进程不是源进程，则会用源进程中的张量内容覆盖这个张量。
+    # src：源进程的rank。这是一个整数，指定哪个进程中的张量将被广播给所有其他进程。
+    # group：可选参数，用来指定通信应该在哪个进程组中进行。如果设置为None，则默认使用全局进程组。
     torch.distributed.broadcast(
         flatten_data, get_tensor_model_parallel_src_rank(), group=get_tensor_model_parallel_group()
     )

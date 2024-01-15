@@ -3,24 +3,25 @@
 # Runs the "345M" parameter model
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-
+export NCCL_DEBUG=INFO
+export NCCL_IB_GID_INDEX=3
 GPUS_PER_NODE=8
 # Change for multinode config
-MASTER_ADDR=localhost
-MASTER_PORT=6000
-NNODES=1
-NODE_RANK=0
-WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
+#MASTER_ADDR=localhost
+#MASTER_PORT=6000
+#NNODES=1
+#NODE_RANK=0
+#WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-CHECKPOINT_PATH=<Specify path>
-VOCAB_FILE=<Specify path to file>/gpt2-vocab.json
-MERGE_FILE=<Specify path to file>/gpt2-merges.txt
-DATA_PATH=<Specify path and file prefix>_text_document
+CHECKPOINT_PATH=/root/new/megatron-lm/checkpoints/gpt2 #自定义ckp路径
+VOCAB_FILE=/root/new/megatron-lm/data/gpt2-vocab.json
+MERGE_FILE=/root/new/megatron-lm/data/gpt2-merges.txt
+DATA_PATH=/root/new/megatron-lm/data/meg-gpt2-oscar-en-10k_text_document
 
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
-    --nnodes $NNODES \
-    --node_rank $NODE_RANK \
+    --nnodes $WORLD_SIZE \
+    --node_rank $RANK \
     --master_addr $MASTER_ADDR \
     --master_port $MASTER_PORT
 "

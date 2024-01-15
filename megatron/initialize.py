@@ -242,6 +242,7 @@ def _initialize_distributed():
         if mpu.model_parallel_is_initialized():
             print("model parallel is already initialized")
         else:
+            # 核心入口
             mpu.initialize_model_parallel(
                 args.tensor_model_parallel_size,
                 args.pipeline_model_parallel_size,
