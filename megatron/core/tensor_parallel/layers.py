@@ -192,7 +192,9 @@ class VocabParallelEmbedding(torch.nn.Module):
         else:
             self.weight = Parameter(
                 torch.empty(
+                    # token id 范围
                     self.num_embeddings_per_partition,
+                    # 隐藏层大小
                     self.embedding_dim,
                     device=torch.cuda.current_device(),
                     dtype=config.params_dtype,
@@ -207,9 +209,11 @@ class VocabParallelEmbedding(torch.nn.Module):
         ), "An input token is out of bounds of the embedding table"
         if self.tensor_model_parallel_size > 1:
             # Build the mask.
+            # 只包含对应区间的mask
             input_mask = (input_ < self.vocab_start_index) | (input_ >= self.vocab_end_index)
             # Mask the input.
             masked_input = input_.clone() - self.vocab_start_index
+            # 超出当前token ID 范围的词被置0
             masked_input[input_mask] = 0
         else:
             masked_input = input_

@@ -5,7 +5,7 @@
 import random
 import os
 import time
-
+import json
 import numpy as np
 import torch
 from datetime import timedelta
@@ -201,6 +201,9 @@ def _initialize_tp_communicators():
 def _initialize_distributed():
     """Initialize torch.distributed and core model parallel."""
     args = get_args()
+    with open('allocations.json', 'r') as f:
+        group_allocation = json.load(f)
+
 
     device_count = torch.cuda.device_count()
     if torch.distributed.is_initialized():
@@ -244,6 +247,7 @@ def _initialize_distributed():
         else:
             # 核心入口
             mpu.initialize_model_parallel(
+                group_allocation,
                 args.tensor_model_parallel_size,
                 args.pipeline_model_parallel_size,
                 args.virtual_pipeline_model_parallel_size,

@@ -809,7 +809,7 @@ class ParallelAttention(MegatronModule):
         # =================
         # Output. [sq, b, h]
         # =================
-
+        # 这里调用了RowParallelLinear的forward函数
         output, bias = self.dense(context_layer)
 
         return output, bias
