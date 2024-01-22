@@ -277,7 +277,7 @@ def initialize_model_parallel(
                     tensor_ranks, pg_options=get_nccl_options('tp', nccl_comm_cfgs)
                    )
             else:
-                tensor_ranks = gpu
+                tensor_ranks = list[gpu]
                 group = torch.distributed.new_group(
                     tensor_ranks, pg_options=get_nccl_options('tp', nccl_comm_cfgs)
                    )
