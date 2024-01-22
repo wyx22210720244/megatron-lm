@@ -276,6 +276,11 @@ def initialize_model_parallel(
                 group = torch.distributed.new_group(
                     tensor_ranks, pg_options=get_nccl_options('tp', nccl_comm_cfgs)
                    )
+            else:
+                tensor_ranks = gpu
+                group = torch.distributed.new_group(
+                    tensor_ranks, pg_options=get_nccl_options('tp', nccl_comm_cfgs)
+                   )
             if rank in tensor_ranks:
                 _TENSOR_MODEL_PARALLEL_GROUP = group
                 _TENSOR_PARALLEL_RANKS = tensor_ranks
@@ -296,17 +301,46 @@ def initialize_model_parallel(
     assert _POSITION_EMBEDDING_GROUP is None, 'position embedding group is already initialized'
     for key,value in group_allocation.items():
         pipeline_ranks = []
-        for gpu in value:
-            if isinstance(gpu,list):
-                pipeline_ranks.append(gpu[0])
-            else:
-                pipeline_ranks.append(gpu)
-        group = torch.distributed.new_group(
-            pipeline_ranks, pg_options=get_nccl_options('pp', nccl_comm_cfgs)
-        )
-        if rank in pipeline_ranks:
-            _PIPELINE_MODEL_PARALLEL_GROUP = group
-            _PIPELINE_GLOBAL_RANKS = pipeline_ranks
+        # DP组中只有TP
+        if contain_only_one_sublist(value):
+            for gpu in value:
+                for idx,element in gpu:
+                    pipeline_ranks = element
+                    group = torch.distributed.new_group(
+                        pipeline_ranks, pg_options=get_nccl_options('pp', nccl_comm_cfgs)
+                    )
+                    if rank in pipeline_ranks:
+                        _PIPELINE_MODEL_PARALLEL_GROUP = group
+                        _PIPELINE_GLOBAL_RANKS = pipeline_ranks
+                    embedding_ranks = pipeline_ranks
+                    position_embedding_ranks = pipeline_ranks
+                    group = torch.distributed.new_group(
+                        embedding_ranks, pg_options=get_nccl_options('embd', nccl_comm_cfgs)
+                    )
+                    if rank in embedding_ranks:
+                        _EMBEDDING_GROUP = group
+                    if rank in pipeline_ranks:
+                        _EMBEDDING_GLOBAL_RANKS = embedding_ranks
+
+                    group = torch.distributed.new_group(
+                        position_embedding_ranks, pg_options=get_nccl_options('embd', nccl_comm_cfgs)
+                    )
+                    if rank in position_embedding_ranks:
+                        _POSITION_EMBEDDING_GROUP = group
+                    if rank in pipeline_ranks:
+                        _POSITION_EMBEDDING_GLOBAL_RANKS = position_embedding_ranks
+        else:
+            for gpu in value:
+                if isinstance(gpu,list):
+                    pipeline_ranks.append(gpu[0])
+                else:
+                    pipeline_ranks.append(gpu)
+            group = torch.distributed.new_group(
+                pipeline_ranks, pg_options=get_nccl_options('pp', nccl_comm_cfgs)
+            )
+            if rank in pipeline_ranks:
+                _PIPELINE_MODEL_PARALLEL_GROUP = group
+                _PIPELINE_GLOBAL_RANKS = pipeline_ranks
         # Setup embedding group (to exchange gradients between
         # first and last stages).
         if len(pipeline_ranks) > 1:
@@ -1326,3 +1360,15 @@ def destroy_model_parallel():
     _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
+def contain_only_one_sublist(list):
+    if len(list) != 1:
+        return False
+    if not isinstance(list[0], list):
+        return False
+    return True
+def contain_only_one_element(list):
+    if len(list) != 1:
+        return False
+    if not isinstance(list[0], int):
+        return False
+    return True

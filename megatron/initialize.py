@@ -60,9 +60,9 @@ def initialize_megatron(
         _initialize_distributed()
 
         # Random seeds for reproducibility.
-        if args.rank == 0:
-            print("> setting random seeds to {} ...".format(args.seed))
-        _set_random_seed(args.seed, args.data_parallel_random_init)
+        #if args.rank == 0:
+            #print("> setting random seeds to {} ...".format(args.seed))
+        #_set_random_seed(args.seed, args.data_parallel_random_init)
 
     if skip_mpu_initialization:
         return None
