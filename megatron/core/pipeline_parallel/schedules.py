@@ -1130,7 +1130,7 @@ def forward_backward_pipelining_without_interleaving(
         max_outstanding_backprops = num_warmup_microbatches + 1
 
     model_type = get_model_type(model)
-
+    # 在pp组内的rank
     rank = parallel_state.get_pipeline_model_parallel_rank()
     recv_tensor_shapes = get_tensor_shapes(
         rank=rank - 1,
@@ -1169,6 +1169,7 @@ def forward_backward_pipelining_without_interleaving(
             checkpoint_activations_microbatch = None
 
         input_tensor = recv_forward(recv_tensor_shapes, config)
+        # 如果有TP，此处返回的是TP的reduce过的输出
         output_tensor = forward_step(
             forward_step_func,
             data_iterator,
@@ -1295,5 +1296,5 @@ def forward_backward_pipelining_without_interleaving(
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
         config.finalize_model_grads_func([model])
-
+    # print(f"rank is {torch.distributed_get_rank()}finish finalize_model_grads_func")
     return forward_data_store

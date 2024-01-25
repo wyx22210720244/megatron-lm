@@ -4,7 +4,7 @@ from typing import List
 
 import torch
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
-
+from megatron import get_args
 from .. import parallel_state
 from ..transformer.transformer_config import TransformerConfig
 from ..utils import get_attr_wrapped_model, get_model_config
@@ -17,10 +17,10 @@ def _allreduce_word_embedding_grads(model: List[torch.nn.Module], config: Transf
     Reduce grads across first and last stages to ensure that word_embeddings parameters stay in
     sync. This should only run for models that support pipelined model parallelism (BERT and GPT).
     """
-
+    args = get_args()
     if (
-        parallel_state.is_rank_in_embedding_group(ignore_virtual=True)
-        and parallel_state.get_pipeline_model_parallel_world_size() > 1
+            parallel_state.is_rank_in_embedding_group(ignore_virtual=True)
+            and parallel_state.get_pipeline_model_parallel_world_size() > 1
     ):
         if parallel_state.is_pipeline_first_stage(ignore_virtual=True):
             model_module = model[0]
@@ -38,7 +38,25 @@ def _allreduce_word_embedding_grads(model: List[torch.nn.Module], config: Transf
         if model_module.share_embeddings_and_output_weights:
             weight = model_module.shared_embedding_or_output_weight()
             grad = weight.main_grad
-            torch.distributed.all_reduce(grad, group=parallel_state.get_embedding_group())
+            embedding_group = parallel_state.get_embedding_group()
+            embedding_global_ranks = parallel_state.get_embedding_global_ranks()
+            # print(f"rank is {torch.distributed.get_rank()} begin embedding grad allreduce++++++++++++++")
+            if len(embedding_group) == 1:
+                torch.distributed.all_reduce(grad, group=embedding_group[0])
+            elif embedding_global_ranks[0] == embedding_global_ranks[1]:
+                torch.distributed.all_reduce(grad, group=embedding_group[0])
+            else:
+                for idx, value in embedding_group.items():
+                    if idx == 0:
+                        torch.distributed.all_reduce(
+                            grad[:args.padded_vocab_size // 2, :],
+                            group=value)
+                    else:
+                        torch.distributed.all_reduce(
+                            grad[args.padded_vocab_size // 2:, :],
+                            group=value)
+            # grad = weight.main_grad
+            # torch.distributed.all_reduce(grad, group=embedding_group[0])
 
 
 def _allreduce_position_embedding_grads(model: List[torch.nn.Module], config: TransformerConfig):
@@ -48,9 +66,9 @@ def _allreduce_position_embedding_grads(model: List[torch.nn.Module], config: Tr
     with pipeline parallelism.
     """
     if (
-        parallel_state.is_rank_in_position_embedding_group()
-        and parallel_state.get_pipeline_model_parallel_world_size() > 1
-        and config.pipeline_model_parallel_split_rank is not None
+            parallel_state.is_rank_in_position_embedding_group()
+            and parallel_state.get_pipeline_model_parallel_world_size() > 1
+            and config.pipeline_model_parallel_split_rank is not None
     ):
         model_module = model[0]
         grad = get_attr_wrapped_model(
@@ -96,8 +114,8 @@ def _allreduce_expert_grads(model: List[torch.nn.Module], config: TransformerCon
 
     # All-reduce switchmlp parameters across data modulo expert parallel nodes
     if (
-        config.expert_model_parallel_size > 1
-        and config.expert_model_parallel_size < parallel_state.get_data_parallel_world_size()
+            config.expert_model_parallel_size > 1
+            and config.expert_model_parallel_size < parallel_state.get_data_parallel_world_size()
     ):
         grads = []
         for model_chunk in model:
@@ -113,6 +131,7 @@ def _allreduce_expert_grads(model: List[torch.nn.Module], config: TransformerCon
             buf.copy_(synced)
 
 
+# 完成所有的梯度同步操作
 def finalize_model_grads(model: List[torch.nn.Module]):
     """
     All-reduce all model grads across DP replicas, layernorm grads for sequence parallelism,

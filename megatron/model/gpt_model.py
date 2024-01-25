@@ -65,8 +65,9 @@ class GPTModel(MegatronModule):
             encoder_attn_mask_type=AttnMaskType.causal,
             pre_process=self.pre_process,
             post_process=self.post_process)
-        
+        print(f"rank is {torch.distributed.get_rank()}finish get_language_model")
         if not args.untie_embeddings_and_output_weights:
+            print(f"rank is {torch.distributed.get_rank()}start initialize_word_embeddings")
             self.initialize_word_embeddings()
 
     def set_input_tensor(self, input_tensor):

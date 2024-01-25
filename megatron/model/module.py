@@ -9,16 +9,13 @@ from torch.nn.parameter import Parameter
 from megatron import get_args
 from megatron.core import mpu, tensor_parallel
 
-
 _FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
 _HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
 _BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor)
 
 
-
 def param_is_not_shared(param):
     return not hasattr(param, 'shared') or not param.shared
-
 
 
 class MegatronModule(torch.nn.Module):
@@ -30,12 +27,10 @@ class MegatronModule(torch.nn.Module):
         self.config = config
         self.share_embeddings_and_output_weights = share_embeddings_and_output_weights
 
-
     def state_dict_for_save_checkpoint(self, prefix='', keep_vars=False):
         """Use this function to override the state dict for
         saving checkpoints."""
         return self.state_dict(prefix=prefix, keep_vars=keep_vars)
-
 
     def shared_embedding_or_output_weight(self):
         if self.pre_process:
@@ -45,7 +40,6 @@ class MegatronModule(torch.nn.Module):
                 raise Exception('shared_embedding_or_output_weight() called for last '
                                 'stage, but share_embeddings_and_output_weights is false')
             return self.word_embeddings.weight
-
 
     def initialize_word_embeddings(self):
         args = get_args()
@@ -103,10 +97,30 @@ class MegatronModule(torch.nn.Module):
             return
 
         # Ensure that first and last stages have the same initial parameter
-        # values.
+        # values
         if mpu.is_rank_in_embedding_group():
-            torch.distributed.all_reduce(self.shared_embedding_or_output_weight().data,
-                                         group=mpu.get_embedding_group())
+            embedding_group = mpu.get_embedding_group()
+            embedding_global_rank = mpu.get_embedding_global_ranks()
+            if len(embedding_group) == 1 :
+                torch.distributed.all_reduce(self.shared_embedding_or_output_weight().data,
+                                             group=embedding_group[0])
+            elif embedding_global_rank[0] == embedding_global_rank[1]:
+                torch.distributed.all_reduce(self.shared_embedding_or_output_weight().data,
+                                             group=embedding_group[0])
+                print(f"rank is {torch.distributed.get_rank()} doing embedding all reduce")
+            else:
+                for idx, value in embedding_group.items():
+                    if idx == 0:
+                        torch.distributed.all_reduce(
+                            self.shared_embedding_or_output_weight()[:args.padded_vocab_size // 2, :].data,
+                            group=value)
+                    else:
+                        torch.distributed.all_reduce(
+                            self.shared_embedding_or_output_weight()[args.padded_vocab_size // 2:, :].data,
+                            group=value)
+
+            # torch.distributed.all_reduce(self.shared_embedding_or_output_weight().data,
+            #                              group=mpu.get_embedding_group())
 
         # Ensure that encoder(first stage) and decoder(split stage) position
         # embeddings have the same initial parameter values
@@ -133,6 +147,7 @@ def conversion_helper(val, conversion):
 
 def fp32_to_float16(val, float16_convertor):
     """Convert fp32 `val` to fp16/bf16"""
+
     def half_conversion(val):
         val_typecheck = val
         if isinstance(val_typecheck, (Parameter, Variable)):
@@ -140,11 +155,13 @@ def fp32_to_float16(val, float16_convertor):
         if isinstance(val_typecheck, _FLOAT_TYPES):
             val = float16_convertor(val)
         return val
+
     return conversion_helper(val, half_conversion)
 
 
 def float16_to_fp32(val):
     """Convert fp16/bf16 `val` to fp32"""
+
     def float_conversion(val):
         val_typecheck = val
         if isinstance(val_typecheck, (Parameter, Variable)):
@@ -152,8 +169,8 @@ def float16_to_fp32(val):
         if isinstance(val_typecheck, (_BF16_TYPES, _HALF_TYPES)):
             val = val.float()
         return val
-    return conversion_helper(val, float_conversion)
 
+    return conversion_helper(val, float_conversion)
 
 
 class Float16Module(MegatronModule):
@@ -163,10 +180,12 @@ class Float16Module(MegatronModule):
 
         if args.fp16:
             self.add_module('module', module.half())
+
             def float16_convertor(val):
                 return val.half()
         elif args.bf16:
             self.add_module('module', module.bfloat16())
+
             def float16_convertor(val):
                 return val.bfloat16()
         else:
@@ -174,10 +193,8 @@ class Float16Module(MegatronModule):
 
         self.float16_convertor = float16_convertor
 
-
     def set_input_tensor(self, input_tensor):
         return self.module.set_input_tensor(input_tensor)
-
 
     def forward(self, *inputs, **kwargs):
         if mpu.is_pipeline_first_stage():
@@ -187,15 +204,12 @@ class Float16Module(MegatronModule):
             outputs = float16_to_fp32(outputs)
         return outputs
 
-
     def state_dict(self, prefix='', keep_vars=False):
         return self.module.state_dict(prefix=prefix, keep_vars=keep_vars)
-
 
     def state_dict_for_save_checkpoint(self, prefix='', keep_vars=False):
         return self.module.state_dict_for_save_checkpoint(prefix=prefix,
                                                           keep_vars=keep_vars)
-
 
     def load_state_dict(self, state_dict, strict=True):
         self.module.load_state_dict(state_dict, strict=strict)

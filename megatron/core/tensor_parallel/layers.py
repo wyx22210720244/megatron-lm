@@ -212,6 +212,7 @@ class VocabParallelEmbedding(torch.nn.Module):
             # 只包含对应区间的mask
             input_mask = (input_ < self.vocab_start_index) | (input_ >= self.vocab_end_index)
             # Mask the input.
+            # 减去起始idx是因为要获取在当前rank负责的token范围的相对位置，才能在weight中找到对应的embedding
             masked_input = input_.clone() - self.vocab_start_index
             # 超出当前token ID 范围的词被置0
             masked_input[input_mask] = 0
