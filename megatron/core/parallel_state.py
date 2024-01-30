@@ -21,7 +21,8 @@ _EMBEDDING_GROUP = {}
 # Position embedding group.
 _POSITION_EMBEDDING_GROUP = {}
 # Data parallel group that the current rank belongs to.
-_DATA_PARALLEL_GROUP = None
+_DATA_PARALLEL_GROUP = {}
+_DATA_PARALLEL_IDX = 0
 _DATA_PARALLEL_GROUP_GLOO = None
 # tensor model parallel group and data parallel group combined
 # used for fp8 and moe training
@@ -57,7 +58,8 @@ _PIPELINE_GLOBAL_RANKS_DICT = None
 _TENSOR_PARALLEL_RANKS = None
 # A list of global ranks for each data parallel group to ease calculation of the source
 # rank when broadcasting weights from src to all other data parallel ranks
-_DATA_PARALLEL_GLOBAL_RANKS = None
+_DATA_PARALLEL_GLOBAL_RANKS = {}
+# _DATA_PARALLEL_GLOBAL_RANKS_IDX = 0
 
 # Context parallel group that the current rank belongs to
 _CONTEXT_PARALLEL_GROUP = None
@@ -174,42 +176,68 @@ def initialize_model_parallel(
 
     # Build the data-parallel groups.
     global _DATA_PARALLEL_GROUP
+    global _DATA_PARALLEL_IDX
     global _DATA_PARALLEL_GROUP_GLOO
     global _DATA_PARALLEL_GLOBAL_RANKS
     global _DATA_PARALLEL_GROUP_WITH_CP
     global _DATA_PARALLEL_GROUP_WITH_CP_GLOO
     global _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP
-    assert _DATA_PARALLEL_GROUP is None, 'data parallel group is already initialized'
+    assert not _DATA_PARALLEL_GROUP, 'data parallel group is already initialized'
     all_data_parallel_group_ranks_with_cp = []
-    for key, value in group_allocation.items():
-        for gpu in value:
-            if isinstance(gpu, list):
-                for j in gpu:
-                    ranks = [j]
-                    group = torch.distributed.new_group(
-                        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-                    )
-                    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-                    if rank in ranks:
-                        _DATA_PARALLEL_GROUP = group
-                        _DATA_PARALLEL_GROUP_GLOO = group_gloo
-                        _DATA_PARALLEL_GLOBAL_RANKS = ranks
-                        _DATA_PARALLEL_GROUP_WITH_CP = group
-                        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-                        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-            else:
-                ranks = [gpu]
-                group = torch.distributed.new_group(
-                    ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-                )
-                group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-                if rank in ranks:
-                    _DATA_PARALLEL_GROUP = group
-                    _DATA_PARALLEL_GROUP_GLOO = group_gloo
-                    _DATA_PARALLEL_GLOBAL_RANKS = ranks
-                    _DATA_PARALLEL_GROUP_WITH_CP = group
-                    _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-                    _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
+    # for key, value in group_allocation.items():
+    #     for gpu in value:
+    #         if isinstance(gpu, list):
+    #             for j in gpu:
+    #                 ranks = [j]
+    #                 group = torch.distributed.new_group(
+    #                     ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
+    #                 )
+    #                 group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+    #                 if rank in ranks:
+    #                     _DATA_PARALLEL_GROUP = group
+    #                     _DATA_PARALLEL_GROUP_GLOO = group_gloo
+    #                     _DATA_PARALLEL_GLOBAL_RANKS = ranks
+    #                     _DATA_PARALLEL_GROUP_WITH_CP = group
+    #                     _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+    #                     _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
+    #         else:
+    #             ranks = [gpu]
+    #             group = torch.distributed.new_group(
+    #                 ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
+    #             )
+    #             group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+    #             if rank in ranks:
+    #                 _DATA_PARALLEL_GROUP = group
+    #                 _DATA_PARALLEL_GROUP_GLOO = group_gloo
+    #                 _DATA_PARALLEL_GLOBAL_RANKS = ranks
+    #                 _DATA_PARALLEL_GROUP_WITH_CP = group
+    #                 _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+    #                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
+    ranks = [0, 2]
+    group = torch.distributed.new_group(
+        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
+    )
+    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+    if rank in ranks:
+        _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
+        _DATA_PARALLEL_GROUP_GLOO = group_gloo
+        _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
+        _DATA_PARALLEL_GROUP_WITH_CP = group
+        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
+        _DATA_PARALLEL_IDX += 1
+    ranks = [1, 2]
+    group = torch.distributed.new_group(
+        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
+    )
+    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+    if rank in ranks:
+        _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
+        _DATA_PARALLEL_GROUP_GLOO = group_gloo
+        _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
+        _DATA_PARALLEL_GROUP_WITH_CP = group
+        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
 
     # for i in range(pipeline_model_parallel_size):
     #     start_rank = i * num_pipeline_model_parallel_groups
@@ -946,7 +974,7 @@ def get_data_parallel_group(with_context_parallel=False):
         ), 'data parallel group with context parallel combined is not initialized'
         return _DATA_PARALLEL_GROUP_WITH_CP
     else:
-        assert _DATA_PARALLEL_GROUP is not None, 'data parallel group is not initialized'
+        assert _DATA_PARALLEL_GROUP, 'data parallel group is not initialized'
         return _DATA_PARALLEL_GROUP
 
 
@@ -980,11 +1008,13 @@ def get_context_parallel_global_ranks(check_initialized=True):
 
 def get_embedding_group():
     """Get the embedding group the caller rank belongs to."""
-    assert _EMBEDDING_GROUP , 'embedding group is not initialized'
+    assert _EMBEDDING_GROUP, 'embedding group is not initialized'
     return _EMBEDDING_GROUP
+
 
 def get_embedding_global_ranks():
     return _EMBEDDING_GLOBAL_RANKS
+
 
 def get_position_embedding_group():
     """Get the position embedding group the caller rank belongs to."""
@@ -1235,6 +1265,7 @@ def get_tensor_model_parallel_src_rank():
 def get_data_parallel_src_rank(with_context_parallel=False):
     """Calculate the global rank corresponding to the first local rank
     in the data parallel group."""
+    # DP参数随机初始化的时候才会用到
     if with_context_parallel:
         assert (
                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP is not None
@@ -1286,7 +1317,7 @@ def get_data_parallel_world_size(with_context_parallel=False):
     """Return world size for the data parallel group."""
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         return torch.distributed.get_world_size(
-            group=get_data_parallel_group(with_context_parallel=with_context_parallel)
+            group=get_data_parallel_group(with_context_parallel=with_context_parallel)[0]
         )
     else:
         return 0
@@ -1294,9 +1325,11 @@ def get_data_parallel_world_size(with_context_parallel=False):
 
 def get_data_parallel_rank(with_context_parallel=False):
     """Return my rank for the data parallel group."""
+    global _DATA_PARALLEL_GROUP
+    group = _DATA_PARALLEL_GROUP[0]
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         return torch.distributed.get_rank(
-            group=get_data_parallel_group(with_context_parallel=with_context_parallel)
+            group=group
         )
     else:
         return 0
@@ -1451,6 +1484,7 @@ def change_to_symmetric_list(list1):
             if len(value) <= 1:
                 value.append(value[0])
     return list_var
+
 
 def is_tensor_parallel():
     global _TENSOR_PARALLEL_RANKS

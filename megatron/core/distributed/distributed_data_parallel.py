@@ -37,15 +37,15 @@ class DistributedDataParallel(MegatronModule):
     """
 
     def __init__(
-        self,
-        config: TransformerConfig,
-        module: torch.nn.Module,
-        data_parallel_group: torch.distributed.ProcessGroup,
-        accumulate_allreduce_grads_in_fp32: bool,
-        overlap_grad_reduce: bool,
-        use_distributed_optimizer: bool,
-        disable_bucketing: bool = False,
-        bucket_size: int = 40000000,
+            self,
+            config: TransformerConfig,
+            module: torch.nn.Module,
+            data_parallel_group: torch.distributed.ProcessGroup,
+            accumulate_allreduce_grads_in_fp32: bool,
+            overlap_grad_reduce: bool,
+            use_distributed_optimizer: bool,
+            disable_bucketing: bool = False,
+            bucket_size: int = 40000000,
     ):
         super().__init__(config=config)
         self.module = module
@@ -75,6 +75,7 @@ class DistributedDataParallel(MegatronModule):
 
         # Group parameters by their gradient type.
         grad_dtype_to_params = {}
+        grad_dtype_to_params_name = {}
         param_to_name = {}
         for name, param in self.module.named_parameters():
             if param.requires_grad and getattr(param, 'allreduce', True):
@@ -83,12 +84,44 @@ class DistributedDataParallel(MegatronModule):
                 dtype = torch.float if accumulate_allreduce_grads_in_fp32 else param.dtype
 
                 params = grad_dtype_to_params.get(dtype, [])
+                params_name = grad_dtype_to_params_name.get(dtype, [])
                 params.append(param)
+                params_name.extend([param, name])
                 grad_dtype_to_params[dtype] = params
-
+                grad_dtype_to_params_name[dtype] = params_name
+        print(f'当前rank是{torch.distributed.get_rank()},grad_dtype_to_params: {grad_dtype_to_params_name}')
         # Allocate the grad buffers and map the grads.
         # The grad buffer under the hood creates buckets as appropriate based on bucket_size.
-        self.data_parallel_world_size = torch.distributed.get_world_size(group=data_parallel_group)
+        self.data_parallel_world_size = parallel_state.get_data_parallel_world_size()
+        # embedding weight + position embedding weight
+        self.embedding_weight_numel = 0
+        # layer weight
+        self.layer_weight_numel = torch.tensor(0).cuda()
+        # last pp stage final norm weight and wording embedding weight
+        self.final_norm_numel = 0
+        self.final_word_embedding_numel = 0
+        # calculate the  number of weight
+        if parallel_state.is_pipeline_first_stage() or parallel_state.is_pipeline_last_stage():
+            for _, param in self.module.named_parameters():
+                if 'embedding.word_embeddings' in param_to_name[param]:
+                    self.embedding_weight_numel += param.numel()
+                elif 'embedding.position_embeddings' in param_to_name[param]:
+                    self.embedding_weight_numel += param.numel()
+                elif "layers.0" in param_to_name[param]:
+                    self.layer_weight_numel += param.numel()
+                elif "final_norm" in param_to_name[param]:
+                    self.final_norm_numel += param.numel()
+                elif "word_embeddings" in param_to_name[param]:
+                    self.final_word_embedding_numel += param.numel()
+                else:
+                    continue
+        # self.layer_weight_numel /= self.data_parallel_world_size
+        torch.distributed.broadcast(self.layer_weight_numel, src=0)
+        print(f"rank is {torch.distributed.get_rank()},layer_weight_numel is {self.layer_weight_numel}")
+        print(f"rank is {torch.distributed.get_rank()},embedding_weight_numel is {self.embedding_weight_numel}")
+        print(f"rank is {torch.distributed.get_rank()},final_norm_numel is {self.final_norm_numel}")
+        print(f"rank is {torch.distributed.get_rank()},final_word_embedding_numel is {self.final_word_embedding_numel}")
+
         for dtype, params in grad_dtype_to_params.items():
             self.grad_buffers[dtype] = GradBuffer(
                 dtype,
@@ -98,6 +131,10 @@ class DistributedDataParallel(MegatronModule):
                 param_to_name,
                 self.overlap_grad_reduce,
                 self.use_distributed_optimizer,
+                self.embedding_weight_numel,
+                self.layer_weight_numel,
+                self.final_norm_numel,
+                self.final_word_embedding_numel,
             )
             self.grad_buffer_param_index_map[dtype] = self.grad_buffers[dtype].param_index_map
             for param in params:
@@ -136,7 +173,7 @@ class DistributedDataParallel(MegatronModule):
         return self.module(*inputs, **kwargs)
 
     def _make_param_hook(
-        self, param: torch.nn.Parameter, param_to_grad_buffer: Dict[torch.nn.Parameter, GradBuffer]
+            self, param: torch.nn.Parameter, param_to_grad_buffer: Dict[torch.nn.Parameter, GradBuffer]
     ):
         """
         Creates the all-reduce / reduce-scatter hook for backprop.
@@ -146,10 +183,10 @@ class DistributedDataParallel(MegatronModule):
             if param.requires_grad:
                 if self.overlap_grad_reduce:
                     assert (
-                        param.grad is not None
+                            param.grad is not None
                     ), 'param.grad being None is not safe when overlap_grad_reduce is True'
                 if param.grad is not None and (
-                    not param.grad_added_to_main_grad or getattr(param, 'zero_out_wgrad', False)
+                        not param.grad_added_to_main_grad or getattr(param, 'zero_out_wgrad', False)
                 ):
                     param.main_grad.add_(param.grad.data)
                 param.grad = None

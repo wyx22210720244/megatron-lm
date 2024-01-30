@@ -1296,5 +1296,5 @@ def forward_backward_pipelining_without_interleaving(
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
         config.finalize_model_grads_func([model])
-    # print(f"rank is {torch.distributed_get_rank()}finish finalize_model_grads_func")
+    print(f"rank is {torch.distributed.get_rank()}finish finalize_model_grads_func")
     return forward_data_store

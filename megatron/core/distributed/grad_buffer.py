@@ -18,7 +18,7 @@ def shard_buffer(buffer: torch.Tensor, data_parallel_world_size: int):
     assert buffer.numel() % data_parallel_world_size == 0
     shard_size = buffer.numel() // data_parallel_world_size
     sharded_buffer = [
-        buffer[(r * shard_size) : ((r + 1) * shard_size)] for r in range(data_parallel_world_size)
+        buffer[(r * shard_size): ((r + 1) * shard_size)] for r in range(data_parallel_world_size)
     ]
     return sharded_buffer
 
@@ -43,19 +43,35 @@ class Bucket:
     """
 
     def __init__(
-        self,
-        params: List[torch.nn.Parameter],
-        data: torch.Tensor,
-        offset: int,
-        data_parallel_group: torch.distributed.ProcessGroup,
-        data_parallel_world_size: int,
-        overlap_grad_reduce: bool,
-        use_distributed_optimizer: bool,
+            self,
+            params: List[torch.nn.Parameter],
+            data: torch.Tensor,
+            offset: int,
+            data_parallel_group: torch.distributed.ProcessGroup,
+            data_parallel_world_size: int,
+            overlap_grad_reduce: bool,
+            use_distributed_optimizer: bool,
+            embedding_weight_numel,
+            layer_weight_numel,
+            final_norm_numel,
+            final_word_embedding_numel,
     ):
         # State for bookkeeping: params is the set of parameters this bucket is
         # responsible for, params_with_grad is the set of parameters with grads
         # available. When overlap_grad_reduce is True, communication (all-reduce
         # or reduce-scatter) is issued when params_with_grad equals params.
+        self.final_word_embedding_numel = final_word_embedding_numel
+        self.final_norm_numel = final_norm_numel
+        self.layer_weight_numel = layer_weight_numel
+        self.embedding_weight_numel = embedding_weight_numel
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前bucket的embedding_weight_numel为{self.embedding_weight_numel}++++++++++++++++++++++++++++++++++")
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前bucket的layer_weight_numel为{self.layer_weight_numel}++++++++++++++++++++++++++++++++++")
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前bucket的final_norm_numel为{self.final_norm_numel}++++++++++++++++++++++++++++++++++")
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前bucket的final_word_embedding_numel为{self.final_word_embedding_numel}++++++++++++++++++++++++++++++++++")
         self.params_list = params
         self.params = set(params)
         self.params_with_grad = set()
@@ -89,10 +105,12 @@ class Bucket:
         synchronous call.
         """
         assert (
-            self.communication_handle is None and not self.communication_issued
+                self.communication_handle is None and not self.communication_issued
         ), 'Should not have multiple communication calls in flight at once'
 
         self.data /= self.data_parallel_world_size
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前bucket的data为{self.data}++++++++++++++++++++++++++++++++++")
         # Use async_op only when overlap_grad_reduce is True.
         if self.use_distributed_optimizer:
             local_data_view = shard_buffer(self.data, self.data_parallel_world_size)[
@@ -105,9 +123,34 @@ class Bucket:
                 async_op=self.overlap_grad_reduce,
             )
         else:
-            self.communication_handle = torch.distributed.all_reduce(
-                self.data, group=self.data_parallel_group, async_op=self.overlap_grad_reduce
-            )
+            print(f"当前rank为{torch.distributed.get_rank()}，开始all_reduce++++++++++++++++++++++++++++++++++")
+            data_parallel_group = parallel_state.get_data_parallel_group()
+            rank = torch.distributed.get_rank()
+            if rank == 0:
+                group = data_parallel_group[0]
+                self.communication_handle = torch.distributed.all_reduce(
+                    self.data, group=group, async_op=self.overlap_grad_reduce
+                )
+            elif rank == 1:
+                group = data_parallel_group[0]
+                label = self.layer_weight_numel * 2 + self.final_norm_numel
+                self.communication_handle = torch.distributed.all_reduce(
+                    self.data[:label], group=group, async_op=self.overlap_grad_reduce
+                )
+            else:
+                for idx, group in data_parallel_group.items():
+                    if idx == 0:
+                        label = self.layer_weight_numel * 2 + self.embedding_weight_numel
+                        print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[:label], group=group, async_op=self.overlap_grad_reduce
+                        )
+                    else:
+                        label = self.layer_weight_numel * 2 + self.embedding_weight_numel
+                        print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[label:], group=group, async_op=self.overlap_grad_reduce
+                        )
         self.communication_issued = True
 
     def finish_grad_sync(self):
@@ -165,14 +208,18 @@ class GradBuffer:
     """
 
     def __init__(
-        self,
-        dtype: torch.dtype,
-        params: List[torch.nn.Parameter],
-        data_parallel_group: torch.distributed.ProcessGroup,
-        bucket_size: int,
-        param_to_name: Dict[torch.nn.Parameter, str],
-        overlap_grad_reduce: bool,
-        use_distributed_optimizer: bool,
+            self,
+            dtype: torch.dtype,
+            params: List[torch.nn.Parameter],
+            data_parallel_group: torch.distributed.ProcessGroup,
+            bucket_size: int,
+            param_to_name: Dict[torch.nn.Parameter, str],
+            overlap_grad_reduce: bool,
+            use_distributed_optimizer: bool,
+            embedding_weight_numel,
+            layer_weight_numel,
+            final_norm_numel,
+            final_word_embedding_numel,
     ):
 
         # Check that params are unique.
@@ -182,12 +229,17 @@ class GradBuffer:
             unique_params.add(param)
         del unique_params
 
+        self.final_word_embedding_numel = final_word_embedding_numel
+        self.final_norm_numel = final_norm_numel
+        self.layer_weight_numel = layer_weight_numel
+        self.embedding_weight_numel = embedding_weight_numel
         # Store attributes that will be needed later.
         self.dtype = dtype
         self.data_parallel_group = data_parallel_group
-        self.data_parallel_world_size = torch.distributed.get_world_size(
-            group=self.data_parallel_group
-        )
+        # self.data_parallel_world_size = torch.distributed.get_world_size(
+        #     group=self.data_parallel_group
+        # )
+        self.data_parallel_world_size = parallel_state.get_data_parallel_world_size()
         self.overlap_grad_reduce = overlap_grad_reduce
         self.use_distributed_optimizer = use_distributed_optimizer
         self.is_last_microbatch = True
@@ -201,8 +253,8 @@ class GradBuffer:
             """Pads data indices if using distributed optimizer (to ensure uniform sharding)."""
             if use_distributed_optimizer:
                 return (
-                    int(math.ceil(data_index / self.data_parallel_world_size))
-                    * self.data_parallel_world_size
+                        int(math.ceil(data_index / self.data_parallel_world_size))
+                        * self.data_parallel_world_size
                 )
             return data_index
 
@@ -240,7 +292,7 @@ class GradBuffer:
             # As a temporary workaround, we make sure that no bucket has only one parameter.
             if bucket_size is not None:
                 if (data_end_index - bucket_data_start_index) >= bucket_size and len(
-                    bucket_params
+                        bucket_params
                 ) > 1:
                     data_end_index = _pad_if_needed(data_end_index)
                     self.bucket_indices.append((bucket_data_start_index, data_end_index))
@@ -257,6 +309,7 @@ class GradBuffer:
         # Next, create underlying storage for buffer (with numel elements that includes
         # padding as necessary).
         self.numel = data_end_index
+        print(f"当前rank为{torch.distributed.get_rank()}，当前numel为{self.numel}++++++++++++++++++++++++++++++++++")
         if use_distributed_optimizer:
             assert self.numel % self.data_parallel_world_size == 0
         self.data = torch.zeros(
@@ -298,8 +351,8 @@ class GradBuffer:
 
         # Log buckets for all PP stages.
         if (
-            parallel_state.get_data_parallel_rank(with_context_parallel=True) == 0
-            and parallel_state.get_tensor_model_parallel_rank() == 0
+                parallel_state.get_data_parallel_rank(with_context_parallel=True) == 0
+                and parallel_state.get_tensor_model_parallel_rank() == 0
         ):
             logger.info(
                 f'Number of buckets for gradient all-reduce / reduce-scatter: {len(self.buckets)}'
@@ -308,7 +361,7 @@ class GradBuffer:
                 numel = 0
                 for param in bucket.params:
                     numel += param.data.nelement()
-                logger.info(f'Params for bucket {index+1} ({numel} elements):')
+                logger.info(f'Params for bucket {index + 1} ({numel} elements):')
                 for param in bucket.params:
                     logger.info(f'    {param_to_name[param]}')
 
@@ -324,11 +377,11 @@ class GradBuffer:
         return buffer_tensor
 
     def _set_bucket(
-        self,
-        bucket_params: List[torch.nn.Parameter],
-        start_index: int,
-        end_index: int,
-        bucket_id: int,
+            self,
+            bucket_params: List[torch.nn.Parameter],
+            start_index: int,
+            end_index: int,
+            bucket_id: int,
     ):
         """
         Helper function to create new bucket, add it to list of buckets, and
@@ -352,6 +405,10 @@ class GradBuffer:
             data_parallel_world_size=self.data_parallel_world_size,
             overlap_grad_reduce=self.overlap_grad_reduce,
             use_distributed_optimizer=self.use_distributed_optimizer,
+            embedding_weight_numel=self.embedding_weight_numel,
+            layer_weight_numel=self.layer_weight_numel,
+            final_norm_numel=self.final_norm_numel,
+            final_word_embedding_numel=self.final_word_embedding_numel,
         )
         self.buckets.append(bucket)
         for bucket_param in bucket_params:

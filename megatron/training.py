@@ -291,6 +291,8 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 
     if not isinstance(model, list):
         model = [model]
+        for model_chunk in model:
+            print(f"当前的rank是{torch.distributed.get_rank()}, model_chunk是{model_chunk}")
 
     # Disallow training and inference with Transformer Engine
     # for non-GPT models
@@ -307,13 +309,13 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             tensor_parallel.set_defaults_if_not_set_tensor_model_parallel_attributes(param)
 
     # Print number of parameters.
-    if mpu.get_data_parallel_rank() == 0:
-        print(' > number of parameters on (tensor, pipeline) '
-              'model parallel rank ({}, {}): {}'.format(
-            mpu.get_tensor_model_parallel_rank(),
-            mpu.get_pipeline_model_parallel_rank(),
-            sum([sum([p.nelement() for p in model_module.parameters()])
-                 for model_module in model])), flush=True)
+    # if mpu.get_data_parallel_rank() == 0:
+    #     print(' > number of parameters on (tensor, pipeline) '
+    #           'model parallel rank ({}, {}): {}'.format(
+    #         mpu.get_tensor_model_parallel_rank(),
+    #         mpu.get_pipeline_model_parallel_rank(),
+    #         sum([sum([p.nelement() for p in model_module.parameters()])
+    #              for model_module in model])), flush=True)
 
     # GPU allocation.
     for model_module in model:
@@ -323,6 +325,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     if args.fp16 or args.bf16:
         model = [Float16Module(model_module, args) for model_module in model]
 
+    # DDP的入口
     if wrap_with_ddp:
         config = get_model_config(model[0])
         model = [DDP(config,
@@ -455,7 +458,7 @@ def train_step(forward_step_func, data_iterator,
         micro_batch_size=args.micro_batch_size,
         decoder_seq_length=args.decoder_seq_length,
         forward_only=False)
-
+    print(f"rank is {torch.distributed.get_rank()}, 已经执行完losses_reduced")
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
         torch.cuda.empty_cache()
@@ -467,8 +470,9 @@ def train_step(forward_step_func, data_iterator,
 
     # Update parameters.
     timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
+    print(f"rank is {torch.distributed.get_rank()}, 即将执行optimizer")
     update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
-    # print(f"rank is {torch.distributed.get_rank()}, update_successful is {update_successful}")
+    print(f"rank is {torch.distributed.get_rank()}, update_successful is {update_successful}")
     timers('optimizer').stop()
 
     # Vision momentum.
