@@ -113,29 +113,57 @@ class Bucket:
             data_parallel_group = parallel_state.get_data_parallel_group()
             rank = torch.distributed.get_rank()
             if rank == 0:
-                group = data_parallel_group[0]
-                self.communication_handle = torch.distributed.all_reduce(
-                    self.data, group=group, async_op=self.overlap_grad_reduce)
-            elif rank == 1:
-                group = data_parallel_group[0]
-                label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["final_norm"]
-                self.communication_handle = torch.distributed.all_reduce(
-                    self.data[:label], group=group, async_op=self.overlap_grad_reduce
-                )
-            else:
                 for idx, group in data_parallel_group.items():
                     if idx == 0:
-                        label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["embedding_weight"]
-                        print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                        label = self.param_numel_count["layer_weight"] * 4 + self.param_numel_count["embedding_weight"]
+                        # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
                         self.communication_handle = torch.distributed.all_reduce(
                             self.data[:label], group=group, async_op=self.overlap_grad_reduce
                         )
                     else:
-                        label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["embedding_weight"]
-                        print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                        label = self.param_numel_count["layer_weight"] * 4 + self.param_numel_count["embedding_weight"]
+                        # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
                         self.communication_handle = torch.distributed.all_reduce(
                             self.data[label:], group=group, async_op=self.overlap_grad_reduce
                         )
+            elif rank == 1:
+                for idx, group in data_parallel_group.items():
+                    if idx == 0:
+                        label = self.param_numel_count["layer_weight"] * 2
+                        # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[:label], group=group, async_op=self.overlap_grad_reduce
+                        )
+                    else:
+                        label = self.param_numel_count["layer_weight"] * 2
+                        # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[label:], group=group, async_op=self.overlap_grad_reduce
+                        )
+            elif rank == 2:
+                # label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["embedding_weight"]
+                # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                group = data_parallel_group[0]
+                self.communication_handle = torch.distributed.all_reduce(
+                    self.data, group=group, async_op=self.overlap_grad_reduce
+                )
+            elif rank == 3:
+                label = self.param_numel_count["layer_weight"] * 2
+                # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
+                for idx, group in data_parallel_group.items():
+                    if idx == 0:
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[:label], group=group, async_op=self.overlap_grad_reduce
+                        )
+                    else:
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[label:], group=group, async_op=self.overlap_grad_reduce
+                        )
+            elif rank == 4:
+                group = data_parallel_group[0]
+                self.communication_handle = torch.distributed.all_reduce(
+                    self.data, group=group, async_op=self.overlap_grad_reduce
+                )
         self.communication_issued = True
 
     def finish_grad_sync(self):
