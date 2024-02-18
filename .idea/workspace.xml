@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="11b4cc47-7fbd-4420-8e45-51d7ef6b85e1" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/megatron-lm.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/megatron-lm.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/examples/allocations.json" beforeDir="false" afterPath="$PROJECT_DIR$/examples/allocations.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/megatron/core/distributed/grad_buffer.py" beforeDir="false" afterPath="$PROJECT_DIR$/megatron/core/distributed/grad_buffer.py" afterDir="false" />
@@ -56,7 +55,7 @@
       <updated>1708249455302</updated>
       <workItem from="1708249456315" duration="95000" />
       <workItem from="1708249598454" duration="4251000" />
-      <workItem from="1708261285145" duration="2669000" />
+      <workItem from="1708261285145" duration="4227000" />
     </task>
     <servers />
   </component>

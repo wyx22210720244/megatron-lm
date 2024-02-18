@@ -213,7 +213,7 @@ def initialize_model_parallel(
     #                 _DATA_PARALLEL_GROUP_WITH_CP = group
     #                 _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
     #                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-    ranks = [0, 2]
+    ranks = [0, 4]
     group = torch.distributed.new_group(
         ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
     )
@@ -226,7 +226,7 @@ def initialize_model_parallel(
         _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
         _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
         _DATA_PARALLEL_IDX += 1
-    ranks = [0, 3]
+    ranks = [1, 5]
     group = torch.distributed.new_group(
         ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
     )
@@ -239,7 +239,7 @@ def initialize_model_parallel(
         _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
         _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
         _DATA_PARALLEL_IDX += 1
-    ranks = [1, 3]
+    ranks = [2, 6]
     group = torch.distributed.new_group(
         ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
     )
@@ -252,7 +252,7 @@ def initialize_model_parallel(
         _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
         _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
         _DATA_PARALLEL_IDX += 1
-    ranks = [1, 4]
+    ranks = [3, 7]
     group = torch.distributed.new_group(
         ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
     )
