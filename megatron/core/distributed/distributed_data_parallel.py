@@ -86,42 +86,81 @@ class DistributedDataParallel(MegatronModule):
                 params = grad_dtype_to_params.get(dtype, [])
                 params_name = grad_dtype_to_params_name.get(dtype, [])
                 params.append(param)
-                params_name.extend([param, name])
+                params_name.extend([param, name, param.shape])
                 grad_dtype_to_params[dtype] = params
                 grad_dtype_to_params_name[dtype] = params_name
         print(f'当前rank是{torch.distributed.get_rank()},grad_dtype_to_params: {grad_dtype_to_params_name}')
         # Allocate the grad buffers and map the grads.
         # The grad buffer under the hood creates buckets as appropriate based on bucket_size.
         self.data_parallel_world_size = parallel_state.get_data_parallel_world_size()
+        self.param_numel_count = {"embedding_weight": 0,
+                                  "layer_weight": 0,
+                                  "final_norm": 0,
+                                  "final_word_embedding": 0,
+                                  }
+        self.layer_weight_numel_count = {"input_norm_weight": 0,
+                                         "input_norm_bias": 0,
+                                         "attention_qkv_weight": 0,
+                                         "attention_qkv_bias": 0,
+                                         "attention_dense_weight": 0,
+                                         "attention_dense_bias": 0,
+                                         "post_attention_norm_weight": 0,
+                                         "post_attention_norm_bias": 0,
+                                         "mlp_dense_h_to_4h_weight": 0,
+                                         "mlp_dense_h_to_4h_bias": 0,
+                                         "mlp_dense_4h_to_h_weight": 0,
+                                         "mlp_dense_4h_to_h_bias": 0,
+                                         }
         # embedding weight + position embedding weight
-        self.embedding_weight_numel = 0
+        # self.param_numel_count["embedding_weight"] = 0
         # layer weight
-        self.layer_weight_numel = torch.tensor(0).cuda()
+        # self.layer_weight_numel = torch.tensor(0).cuda()
         # last pp stage final norm weight and wording embedding weight
-        self.final_norm_numel = 0
-        self.final_word_embedding_numel = 0
         # calculate the  number of weight
-        if parallel_state.is_pipeline_first_stage() or parallel_state.is_pipeline_last_stage():
-            for _, param in self.module.named_parameters():
-                if 'embedding.word_embeddings' in param_to_name[param]:
-                    self.embedding_weight_numel += param.numel()
-                elif 'embedding.position_embeddings' in param_to_name[param]:
-                    self.embedding_weight_numel += param.numel()
-                elif "layers.0" in param_to_name[param]:
-                    self.layer_weight_numel += param.numel()
-                elif "final_norm" in param_to_name[param]:
-                    self.final_norm_numel += param.numel()
-                elif "word_embeddings" in param_to_name[param]:
-                    self.final_word_embedding_numel += param.numel()
+        self.rank = torch.distributed.get_rank()
+        for name, param in self.module.named_parameters():
+            if 'embedding.word_embeddings' in name:
+                self.param_numel_count["embedding_weight"] += param.numel()
+            elif 'embedding.position_embeddings' in name:
+                self.param_numel_count["embedding_weight"] += param.numel()
+            elif "layers.0" in name:
+                self.param_numel_count["layer_weight"] += param.numel()
+                if "input_norm.weight" in name:
+                    self.layer_weight_numel_count["input_norm_weight"] += param.numel()
+                elif "input_norm.bias" in name:
+                    self.layer_weight_numel_count["input_norm_bias"] += param.numel()
+                elif "value.weight" in name:
+                    self.layer_weight_numel_count["attention_qkv_weight"] += param.numel()
+                elif "value.bias" in name:
+                    self.layer_weight_numel_count["attention_qkv_bias"] += param.numel()
+                elif "attention.dense.weight" in name:
+                    self.layer_weight_numel_count["attention_dense_weight"] += param.numel()
+                elif "attention.dense.bias" in name:
+                    self.layer_weight_numel_count["attention_dense_bias"] += param.numel()
+                elif "post_attention_norm.weight" in name:
+                    self.layer_weight_numel_count["post_attention_norm_weight"] += param.numel()
+                elif "post_attention_norm.bias" in name:
+                    self.layer_weight_numel_count["post_attention_norm_bias"] += param.numel()
+                elif "mlp.dense_h_to_4h.weight" in name:
+                    self.layer_weight_numel_count["mlp_dense_h_to_4h_weight"] += param.numel()
+                elif "mlp.dense_h_to_4h.bias" in name:
+                    self.layer_weight_numel_count["mlp_dense_h_to_4h_bias"] += param.numel()
+                elif "mlp.dense_4h_to_h.weight" in name:
+                    self.layer_weight_numel_count["mlp_dense_4h_to_h_weight"] += param.numel()
+                elif "mlp.dense_4h_to_h.bias" in name:
+                    self.layer_weight_numel_count["mlp_dense_4h_to_h_bias"] += param.numel()
                 else:
-                    continue
+                    raise ValueError(f"rank is {self.rank},name is {name}")
+            elif "final_norm" in name:
+                self.param_numel_count["final_norm"] += param.numel()
+            elif "word_embeddings" in name:
+                self.param_numel_count["final_word_embedding"] += param.numel()
+            else:
+                continue
         # self.layer_weight_numel /= self.data_parallel_world_size
-        torch.distributed.broadcast(self.layer_weight_numel, src=0)
-        print(f"rank is {torch.distributed.get_rank()},layer_weight_numel is {self.layer_weight_numel}")
-        print(f"rank is {torch.distributed.get_rank()},embedding_weight_numel is {self.embedding_weight_numel}")
-        print(f"rank is {torch.distributed.get_rank()},final_norm_numel is {self.final_norm_numel}")
-        print(f"rank is {torch.distributed.get_rank()},final_word_embedding_numel is {self.final_word_embedding_numel}")
-
+        # torch.distributed.broadcast(self.layer_weight_numel, src=0)
+        print(f"rank is {torch.distributed.get_rank()},param_numel_count is {self.param_numel_count}")
+        print(f"rank is {torch.distributed.get_rank()},layer_weight_numel_count is {self.layer_weight_numel_count}")
         for dtype, params in grad_dtype_to_params.items():
             self.grad_buffers[dtype] = GradBuffer(
                 dtype,
@@ -131,10 +170,8 @@ class DistributedDataParallel(MegatronModule):
                 param_to_name,
                 self.overlap_grad_reduce,
                 self.use_distributed_optimizer,
-                self.embedding_weight_numel,
-                self.layer_weight_numel,
-                self.final_norm_numel,
-                self.final_word_embedding_numel,
+                param_numel_count=self.param_numel_count,
+                layer_weight_numel_count=self.layer_weight_numel_count,
             )
             self.grad_buffer_param_index_map[dtype] = self.grad_buffers[dtype].param_index_map
             for param in params:

@@ -51,27 +51,15 @@ class Bucket:
             data_parallel_world_size: int,
             overlap_grad_reduce: bool,
             use_distributed_optimizer: bool,
-            embedding_weight_numel,
-            layer_weight_numel,
-            final_norm_numel,
-            final_word_embedding_numel,
+            param_numel_count,
+            layer_weight_numel_count,
     ):
         # State for bookkeeping: params is the set of parameters this bucket is
         # responsible for, params_with_grad is the set of parameters with grads
         # available. When overlap_grad_reduce is True, communication (all-reduce
         # or reduce-scatter) is issued when params_with_grad equals params.
-        self.final_word_embedding_numel = final_word_embedding_numel
-        self.final_norm_numel = final_norm_numel
-        self.layer_weight_numel = layer_weight_numel
-        self.embedding_weight_numel = embedding_weight_numel
-        print(
-            f"当前rank为{torch.distributed.get_rank()}，当前bucket的embedding_weight_numel为{self.embedding_weight_numel}++++++++++++++++++++++++++++++++++")
-        print(
-            f"当前rank为{torch.distributed.get_rank()}，当前bucket的layer_weight_numel为{self.layer_weight_numel}++++++++++++++++++++++++++++++++++")
-        print(
-            f"当前rank为{torch.distributed.get_rank()}，当前bucket的final_norm_numel为{self.final_norm_numel}++++++++++++++++++++++++++++++++++")
-        print(
-            f"当前rank为{torch.distributed.get_rank()}，当前bucket的final_word_embedding_numel为{self.final_word_embedding_numel}++++++++++++++++++++++++++++++++++")
+        self.param_numel_count = param_numel_count
+        self.layer_weight_numel_count = layer_weight_numel_count
         self.params_list = params
         self.params = set(params)
         self.params_with_grad = set()
@@ -109,8 +97,6 @@ class Bucket:
         ), 'Should not have multiple communication calls in flight at once'
 
         self.data /= self.data_parallel_world_size
-        print(
-            f"当前rank为{torch.distributed.get_rank()}，当前bucket的data为{self.data}++++++++++++++++++++++++++++++++++")
         # Use async_op only when overlap_grad_reduce is True.
         if self.use_distributed_optimizer:
             local_data_view = shard_buffer(self.data, self.data_parallel_world_size)[
@@ -129,24 +115,23 @@ class Bucket:
             if rank == 0:
                 group = data_parallel_group[0]
                 self.communication_handle = torch.distributed.all_reduce(
-                    self.data, group=group, async_op=self.overlap_grad_reduce
-                )
+                    self.data, group=group, async_op=self.overlap_grad_reduce)
             elif rank == 1:
                 group = data_parallel_group[0]
-                label = self.layer_weight_numel * 6 + self.final_norm_numel
+                label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["final_norm"]
                 self.communication_handle = torch.distributed.all_reduce(
                     self.data[:label], group=group, async_op=self.overlap_grad_reduce
                 )
             else:
                 for idx, group in data_parallel_group.items():
                     if idx == 0:
-                        label = self.layer_weight_numel * 6 + self.embedding_weight_numel
+                        label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["embedding_weight"]
                         print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
                         self.communication_handle = torch.distributed.all_reduce(
                             self.data[:label], group=group, async_op=self.overlap_grad_reduce
                         )
                     else:
-                        label = self.layer_weight_numel * 6 + self.embedding_weight_numel
+                        label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["embedding_weight"]
                         print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
                         self.communication_handle = torch.distributed.all_reduce(
                             self.data[label:], group=group, async_op=self.overlap_grad_reduce
@@ -216,10 +201,8 @@ class GradBuffer:
             param_to_name: Dict[torch.nn.Parameter, str],
             overlap_grad_reduce: bool,
             use_distributed_optimizer: bool,
-            embedding_weight_numel,
-            layer_weight_numel,
-            final_norm_numel,
-            final_word_embedding_numel,
+            param_numel_count,
+            layer_weight_numel_count,
     ):
 
         # Check that params are unique.
@@ -229,10 +212,8 @@ class GradBuffer:
             unique_params.add(param)
         del unique_params
 
-        self.final_word_embedding_numel = final_word_embedding_numel
-        self.final_norm_numel = final_norm_numel
-        self.layer_weight_numel = layer_weight_numel
-        self.embedding_weight_numel = embedding_weight_numel
+        self.param_numel_count = param_numel_count
+        self.layer_weight_numel_count = layer_weight_numel_count
         # Store attributes that will be needed later.
         self.dtype = dtype
         self.data_parallel_group = data_parallel_group
@@ -405,10 +386,8 @@ class GradBuffer:
             data_parallel_world_size=self.data_parallel_world_size,
             overlap_grad_reduce=self.overlap_grad_reduce,
             use_distributed_optimizer=self.use_distributed_optimizer,
-            embedding_weight_numel=self.embedding_weight_numel,
-            layer_weight_numel=self.layer_weight_numel,
-            final_norm_numel=self.final_norm_numel,
-            final_word_embedding_numel=self.final_word_embedding_numel,
+            param_numel_count=self.param_numel_count,
+            layer_weight_numel_count=self.layer_weight_numel_count,
         )
         self.buckets.append(bucket)
         for bucket_param in bucket_params:

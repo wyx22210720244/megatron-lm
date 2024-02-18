@@ -3,7 +3,7 @@
 # Runs the "345M" parameter model
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export NCCL_DEBUG=INFO
+#export NCCL_DEBUG=INFO
 export NCCL_IB_GID_INDEX=3
 GPUS_PER_NODE=3
 # Change for multinode config
@@ -30,7 +30,7 @@ GPT_ARGS="
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 3 \
     --sequence-parallel \
-    --num-layers 4 \
+    --num-layers 12 \
     --hidden-size 1024 \
     --num-attention-heads 16 \
     --seq-length 1024 \
