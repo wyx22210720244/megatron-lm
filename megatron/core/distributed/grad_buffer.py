@@ -133,20 +133,20 @@ class Bucket:
                 )
             elif rank == 1:
                 group = data_parallel_group[0]
-                label = self.layer_weight_numel * 2 + self.final_norm_numel
+                label = self.layer_weight_numel * 6 + self.final_norm_numel
                 self.communication_handle = torch.distributed.all_reduce(
                     self.data[:label], group=group, async_op=self.overlap_grad_reduce
                 )
             else:
                 for idx, group in data_parallel_group.items():
                     if idx == 0:
-                        label = self.layer_weight_numel * 2 + self.embedding_weight_numel
+                        label = self.layer_weight_numel * 6 + self.embedding_weight_numel
                         print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
                         self.communication_handle = torch.distributed.all_reduce(
                             self.data[:label], group=group, async_op=self.overlap_grad_reduce
                         )
                     else:
-                        label = self.layer_weight_numel * 2 + self.embedding_weight_numel
+                        label = self.layer_weight_numel * 6 + self.embedding_weight_numel
                         print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
                         self.communication_handle = torch.distributed.all_reduce(
                             self.data[label:], group=group, async_op=self.overlap_grad_reduce
