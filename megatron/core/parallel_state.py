@@ -6,8 +6,9 @@ import os
 from typing import Optional
 import json
 import torch
-
+from megatron import get_args
 from .utils import GlobalMemoryBuffer
+from collections import defaultdict, Counter
 
 # Intra-layer model parallel group that the current rank belongs to.
 _TENSOR_MODEL_PARALLEL_GROUP = None
@@ -59,6 +60,9 @@ _TENSOR_PARALLEL_RANKS = None
 # A list of global ranks for each data parallel group to ease calculation of the source
 # rank when broadcasting weights from src to all other data parallel ranks
 _DATA_PARALLEL_GLOBAL_RANKS = {}
+_DATA_PARALLEL_GLOBAL_LAYERS = {}
+_DATA_PARALLEL_NUM_LAYER = []
+_DATA_PARALLEL_OFFSETS = []
 # _DATA_PARALLEL_GLOBAL_RANKS_IDX = 0
 
 # Context parallel group that the current rank belongs to
@@ -99,7 +103,6 @@ def get_nccl_options(pg_name, nccl_comm_cfgs):
 
 
 def initialize_model_parallel(
-        group_allocation,
         tensor_model_parallel_size: int = 1,
         pipeline_model_parallel_size: int = 1,
         virtual_pipeline_model_parallel_size: Optional[int] = None,
@@ -112,6 +115,8 @@ def initialize_model_parallel(
     """Initialize model data parallel groups.
 
     """
+    layer_allocation = json.load(open("layers.json"))
+    group_allocation = json.load(open("allocations.json"))
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size: int = torch.distributed.get_world_size()
@@ -179,92 +184,73 @@ def initialize_model_parallel(
     global _DATA_PARALLEL_IDX
     global _DATA_PARALLEL_GROUP_GLOO
     global _DATA_PARALLEL_GLOBAL_RANKS
+    global _DATA_PARALLEL_GLOBAL_LAYERS
     global _DATA_PARALLEL_GROUP_WITH_CP
     global _DATA_PARALLEL_GROUP_WITH_CP_GLOO
     global _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP
+    global _DATA_PARALLEL_NUM_LAYER
+    global _DATA_PARALLEL_OFFSETS
     assert not _DATA_PARALLEL_GROUP, 'data parallel group is already initialized'
     all_data_parallel_group_ranks_with_cp = []
-    # for key, value in group_allocation.items():
-    #     for gpu in value:
-    #         if isinstance(gpu, list):
-    #             for j in gpu:
-    #                 ranks = [j]
-    #                 group = torch.distributed.new_group(
-    #                     ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-    #                 )
-    #                 group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-    #                 if rank in ranks:
-    #                     _DATA_PARALLEL_GROUP = group
-    #                     _DATA_PARALLEL_GROUP_GLOO = group_gloo
-    #                     _DATA_PARALLEL_GLOBAL_RANKS = ranks
-    #                     _DATA_PARALLEL_GROUP_WITH_CP = group
-    #                     _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-    #                     _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-    #         else:
-    #             ranks = [gpu]
-    #             group = torch.distributed.new_group(
-    #                 ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-    #             )
-    #             group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-    #             if rank in ranks:
-    #                 _DATA_PARALLEL_GROUP = group
-    #                 _DATA_PARALLEL_GROUP_GLOO = group_gloo
-    #                 _DATA_PARALLEL_GLOBAL_RANKS = ranks
-    #                 _DATA_PARALLEL_GROUP_WITH_CP = group
-    #                 _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-    #                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-    ranks = [0, 4]
-    group = torch.distributed.new_group(
-        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-    )
-    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-    if rank in ranks:
-        _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
-        _DATA_PARALLEL_GROUP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
-        _DATA_PARALLEL_GROUP_WITH_CP = group
-        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-        _DATA_PARALLEL_IDX += 1
-    ranks = [1, 5]
-    group = torch.distributed.new_group(
-        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-    )
-    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-    if rank in ranks:
-        _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
-        _DATA_PARALLEL_GROUP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
-        _DATA_PARALLEL_GROUP_WITH_CP = group
-        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-        _DATA_PARALLEL_IDX += 1
-    ranks = [2, 6]
-    group = torch.distributed.new_group(
-        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-    )
-    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-    if rank in ranks:
-        _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
-        _DATA_PARALLEL_GROUP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
-        _DATA_PARALLEL_GROUP_WITH_CP = group
-        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-        _DATA_PARALLEL_IDX += 1
-    ranks = [3, 7]
-    group = torch.distributed.new_group(
-        ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
-    )
-    group_gloo = torch.distributed.new_group(ranks, backend="gloo")
-    if rank in ranks:
-        _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
-        _DATA_PARALLEL_GROUP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
-        _DATA_PARALLEL_GROUP_WITH_CP = group
-        _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
-        _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
-        _DATA_PARALLEL_IDX += 1
+    unique_layer_allocation = set()
+    # unique_layer_allocation.add(0)
+    for _, layers in layer_allocation.items():
+        for layer in layers:
+            unique_layer_allocation.add(layer)
+    sorted_unique_intervals = sorted(list(unique_layer_allocation))
+    # print(f"sorted_unique_intervals:{sorted_unique_intervals}")
+    dp_group_comm_up = defaultdict(list)
+    dp_group_comm_down = defaultdict(list)
+    group_idx = 0
+    for layer in sorted_unique_intervals:
+        for dp_group, gpus in group_allocation.items():
+            for idx, gpu in enumerate(gpus):
+                if layer_allocation[dp_group][idx] >= layer:
+                    dp_group_comm_up[group_idx].append(gpu[0])
+                    dp_group_comm_down[group_idx].append(gpu[1])
+                    break
+        group_idx += 1
+    dp_group_comm = defaultdict(list)
+    for key, _ in dp_group_comm_up.items():
+        dp_group_comm[key].append(dp_group_comm_up[key])
+        dp_group_comm[key].append(dp_group_comm_down[key])
+    print(f"dp_group_comm:{dp_group_comm}")
+    dp_layer_comm = []
+    sorted_unique_intervals.insert(0, 0)
+    for idx in range(1, len(sorted_unique_intervals)):
+        dp_layer_comm.append(sorted_unique_intervals[idx] - sorted_unique_intervals[idx - 1])
+    # 每个DP组中，每个rank的层数
+    num_layer = defaultdict(list)
+    for dp_group, layers in layer_allocation.items():
+        pre = 0
+        for idx, layer in enumerate(layers):
+            num_layer[dp_group].append(layer-pre)
+            pre = layer
+    for dp_group, gpus in group_allocation.items():
+        for idx, gpu in enumerate(gpus):
+            if rank in gpu :
+                _DATA_PARALLEL_NUM_LAYER = num_layer[dp_group][idx]
+                if idx == 0:
+                    _DATA_PARALLEL_OFFSETS = 0
+                else:
+                    _DATA_PARALLEL_OFFSETS = layer_allocation[dp_group][idx-1]-1
+    for dp_group, gpus in dp_group_comm.items():
+        for gpu in gpus:
+            ranks = gpu
+            group = torch.distributed.new_group(
+                ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
+            )
+            group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+            if rank in ranks:
+                _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
+                _DATA_PARALLEL_GROUP_GLOO = group_gloo
+                _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
+                _DATA_PARALLEL_GLOBAL_LAYERS[_DATA_PARALLEL_IDX] = int(dp_layer_comm[dp_group])
+                _DATA_PARALLEL_GROUP_WITH_CP = group
+                _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+                _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
+                _DATA_PARALLEL_IDX += 1
+
     # for i in range(pipeline_model_parallel_size):
     #     start_rank = i * num_pipeline_model_parallel_groups
     #     end_rank = (i + 1) * num_pipeline_model_parallel_groups
@@ -1439,6 +1425,41 @@ def destroy_global_memory_buffer():
     _GLOBAL_MEMORY_BUFFER = None
 
 
+def get_layer_rank_mapping():
+    """Return layer rank mapping"""
+    with open("dp_layer_rank_mapping.json", 'r') as f:
+        layer_rank_mapping = json.load(f)
+    return layer_rank_mapping
+
+
+def find_matching_layer_dp_group():
+    args = get_args()
+    layer_rank_mapping = get_layer_rank_mapping()
+    num_layer = args.num_layers
+    # dp_group = list(layer_rank_mapping.keys())
+    matching_layer = {}
+    for i in range(1, num_layer + 1):
+        matching_layer[i] = []
+    layer_curr = 1
+    for dp_num, rank_layer in layer_rank_mapping.items():
+        for rank, layer in rank_layer.items():
+            while True:
+                if layer_curr <= layer[1]:
+                    matching_layer[layer_curr].append(rank)
+                    layer_curr += 1
+                else:
+                    break
+        layer_curr = 1
+    print(f"matching_layer为{matching_layer}====================================")
+    return matching_layer
+
+
+def get_data_parallel_global_ranks():
+    """Return all global ranks of the data parallel group that the caller rank belongs to."""
+    assert _DATA_PARALLEL_GLOBAL_RANKS, 'data parallel group is not initialized'
+    return _DATA_PARALLEL_GLOBAL_RANKS
+
+
 def destroy_model_parallel():
     """Set the groups to none."""
     global _MODEL_PARALLEL_GROUP
@@ -1517,3 +1538,24 @@ def is_tensor_parallel():
     if len(_TENSOR_PARALLEL_RANKS) == 1:
         return False
     return True
+
+
+def print_memory_usage():
+    print(f"当前的rank为:{torch.distributed.get_rank()}")
+    print(f"当前占用的显存为{torch.cuda.memory_allocated() / 1024 / 1024}MB")
+    print(f"当前占用的显存为{torch.cuda.memory_reserved() / 1024 / 1024}MB")
+
+
+def get_data_parallel_global_layers():
+    global _DATA_PARALLEL_GLOBAL_LAYERS
+    return _DATA_PARALLEL_GLOBAL_LAYERS
+
+
+def get_data_parallel_num_layer():
+    global _DATA_PARALLEL_NUM_LAYER
+    return int(_DATA_PARALLEL_NUM_LAYER)
+
+
+def get_data_parallel_offset():
+    global _DATA_PARALLEL_OFFSETS
+    return int(_DATA_PARALLEL_OFFSETS)

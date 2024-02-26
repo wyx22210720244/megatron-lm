@@ -7,6 +7,7 @@ from typing import Dict, List
 import torch
 
 from .. import parallel_state
+from megatron import get_args
 
 logger = getLogger(__name__)
 
@@ -95,80 +96,234 @@ class Bucket:
         assert (
                 self.communication_handle is None and not self.communication_issued
         ), 'Should not have multiple communication calls in flight at once'
-
+        rank = torch.distributed.get_rank()
         self.data /= self.data_parallel_world_size
-        # Use async_op only when overlap_grad_reduce is True.
-        if self.use_distributed_optimizer:
-            local_data_view = shard_buffer(self.data, self.data_parallel_world_size)[
-                self.data_parallel_rank
-            ]
-            self.communication_handle = torch.distributed._reduce_scatter_base(
-                local_data_view,
-                self.data,
-                group=self.data_parallel_group,
-                async_op=self.overlap_grad_reduce,
-            )
+        print("当前rank是{torch.distributed.get_rank()}开始all-reduce++++++++++++++++++++++++++++++++++")
+        data_parallel_group = parallel_state.get_data_parallel_group()
+        data_parallel_layer = parallel_state.get_data_parallel_global_layers()
+        start_index = 0
+        if parallel_state.is_pipeline_first_stage():
+            for idx, group in data_parallel_group.items():
+                if idx == 0:
+                    end_index = (self.param_numel_count["embedding_weight"] + self.param_numel_count["layer_weight"] *
+                                 data_parallel_layer[idx])
+                    self.communication_handle = torch.distributed.all_reduce(
+                        self.data[start_index:end_index], group=group, async_op=self.overlap_grad_reduce
+                    )
+                    start_index = end_index
+                else:
+                    end_index = start_index + self.param_numel_count["layer_weight"] * data_parallel_layer[idx]
+                    self.communication_handle = torch.distributed.all_reduce(
+                        self.data[start_index:end_index], group=group, async_op=self.overlap_grad_reduce
+                    )
+                    start_index = end_index
+        elif parallel_state.is_pipeline_last_stage():
+            for idx, group in data_parallel_group.items():
+                if idx == len(data_parallel_group) - 1:
+                    self.communication_handle = torch.distributed.all_reduce(
+                        self.data[start_index:], group=group, async_op=self.overlap_grad_reduce
+                    )
+                else:
+                    end_index = start_index + self.param_numel_count["layer_weight"] * data_parallel_layer[idx]
+                    self.communication_handle = torch.distributed.all_reduce(
+                        self.data[start_index:end_index], group=group, async_op=self.overlap_grad_reduce
+                    )
+                    start_index = end_index
         else:
-            print(f"当前rank为{torch.distributed.get_rank()}，开始all_reduce++++++++++++++++++++++++++++++++++")
-            data_parallel_group = parallel_state.get_data_parallel_group()
-            rank = torch.distributed.get_rank()
-            group = data_parallel_group[0]
-            self.communication_handle = torch.distributed.all_reduce(
-                self.data, group=group, async_op=self.overlap_grad_reduce
-            )
-            # if rank == 0:
-            #     for idx, group in data_parallel_group.items():
-            #         if idx == 0:
-            #             label = self.param_numel_count["layer_weight"] * 4 + self.param_numel_count["embedding_weight"]
-            #             # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
-            #             self.communication_handle = torch.distributed.all_reduce(
-            #                 self.data[:label], group=group, async_op=self.overlap_grad_reduce
-            #             )
-            #         else:
-            #             label = self.param_numel_count["layer_weight"] * 4 + self.param_numel_count["embedding_weight"]
-            #             # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
-            #             self.communication_handle = torch.distributed.all_reduce(
-            #                 self.data[label:], group=group, async_op=self.overlap_grad_reduce
-            #             )
-            # elif rank == 1:
-            #     for idx, group in data_parallel_group.items():
-            #         if idx == 0:
-            #             label = self.param_numel_count["layer_weight"] * 2
-            #             # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
-            #             self.communication_handle = torch.distributed.all_reduce(
-            #                 self.data[:label], group=group, async_op=self.overlap_grad_reduce
-            #             )
-            #         else:
-            #             label = self.param_numel_count["layer_weight"] * 2
-            #             # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
-            #             self.communication_handle = torch.distributed.all_reduce(
-            #                 self.data[label:], group=group, async_op=self.overlap_grad_reduce
-            #             )
-            # elif rank == 2:
-            #     # label = self.param_numel_count["layer_weight"] * 6 + self.param_numel_count["embedding_weight"]
-            #     # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
-            #     group = data_parallel_group[0]
-            #     self.communication_handle = torch.distributed.all_reduce(
-            #         self.data, group=group, async_op=self.overlap_grad_reduce
-            #     )
-            # elif rank == 3:
-            #     label = self.param_numel_count["layer_weight"] * 2
-            #     # print(f"idx = {idx},label = {label}++++++++++++++++++++++++++++++++++")
-            #     for idx, group in data_parallel_group.items():
-            #         if idx == 0:
-            #             self.communication_handle = torch.distributed.all_reduce(
-            #                 self.data[:label], group=group, async_op=self.overlap_grad_reduce
-            #             )
-            #         else:
-            #             self.communication_handle = torch.distributed.all_reduce(
-            #                 self.data[label:], group=group, async_op=self.overlap_grad_reduce
-            #             )
-            # elif rank == 4:
-            #     group = data_parallel_group[0]
-            #     self.communication_handle = torch.distributed.all_reduce(
-            #         self.data, group=group, async_op=self.overlap_grad_reduce
-            #     )
+            for idx, group in data_parallel_group.items():
+                end_index = start_index + self.param_numel_count["layer_weight"] * data_parallel_layer[idx]
+                self.communication_handle = torch.distributed.all_reduce(
+                    self.data[start_index:end_index], group=group, async_op=self.overlap_grad_reduce
+                )
+                start_index = end_index
         self.communication_issued = True
+
+    def restore_grad(self):
+        """
+        把all_reduce后的梯度还原到原来的位置
+        """
+        rank = torch.distributed.get_rank()
+        start_index = 0
+        start_index_reduced = 0
+        args = get_args()
+        if rank == 4:
+            start_index = self.param_numel_count["embedding_weight"] + self.param_numel_count["layer_weight"] * 4
+        for i in range(2):
+            # input_norm
+            end_index = start_index + self.layer_weight_numel_count["input_norm_weight"] + \
+                        self.layer_weight_numel_count[
+                            "input_norm_bias"]
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["input_norm_weight"] + \
+                                self.layer_weight_numel_count[
+                                    "input_norm_bias"]
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            # attention qkv weight,sharded by first dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["attention_qkv_weight"] // 2
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["attention_qkv_weight"] // 2
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["attention_qkv_weight"] // 2
+            self.data[start_index:end_index].copy_(self.bottom_half_data[start_index_reduced:end_index_reduced])
+            # attention qkv bias,sharded by first dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["attention_qkv_bias"] // 2
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["attention_qkv_bias"] // 2
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["attention_qkv_bias"] // 2
+            self.data[start_index:end_index].copy_(self.bottom_half_data[start_index_reduced:end_index_reduced])
+            # attention dense weight，shared by last dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["attention_dense_weight"]
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["attention_dense_weight"] // 2
+            attention_dense_weight = self.data[start_index:end_index].view(args.hidden_size, args.hidden_size)
+            attention_dense_weight[:, :attention_dense_weight.shape[1] // 2].copy_(
+                self.top_half_data[start_index_reduced:end_index_reduced].view(args.hidden_size, args.hidden_size // 2))
+            attention_dense_weight[:, attention_dense_weight.shape[1] // 2:].copy_(
+                self.bottom_half_data[start_index_reduced:end_index_reduced].view(args.hidden_size,
+                                                                                  args.hidden_size // 2))
+            # attention dense bias，The bias within the tp group should be the same, and direct all reduce is sufficient
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["attention_dense_bias"]
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["attention_dense_bias"]
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            # post attention norm weight and bias
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["post_attention_norm_weight"] + \
+                        self.layer_weight_numel_count["post_attention_norm_bias"]
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["post_attention_norm_weight"] + \
+                                self.layer_weight_numel_count["post_attention_norm_bias"]
+            self.data[start_index:end_index].co0py_(self.top_half_data[start_index_reduced:end_index_reduced])
+            # mlp h to 4h weight,sharded by first dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_h_to_4h_weight"] // 2
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["mlp_dense_h_to_4h_weight"] // 2
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_h_to_4h_weight"] // 2
+            self.data[start_index:end_index].copy_(self.bottom_half_data[start_index_reduced:end_index_reduced])
+            # mlp h to 4h bias,sharded by first dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_h_to_4h_bias"] // 2
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["mlp_dense_h_to_4h_bias"] // 2
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_h_to_4h_bias"] // 2
+            self.data[start_index:end_index].copy_(self.bottom_half_data[start_index_reduced:end_index_reduced])
+            # mlp 4h to h weight ,sharded by last dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_4h_to_h_weight"]
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["mlp_dense_4h_to_h_weight"] // 2
+            mlp_4h_to_h_weight = self.data[start_index:end_index].view(args.hidden_size, 4 * args.hidden_size)
+            mlp_4h_to_h_weight[:, :mlp_4h_to_h_weight.shape[1] // 2].copy_(
+                self.top_half_data[start_index_reduced:end_index_reduced].view(args.hidden_size, 2 * args.hidden_size))
+            mlp_4h_to_h_weight[:, mlp_4h_to_h_weight.shape[1] // 2:].copy_(
+                self.bottom_half_data[start_index_reduced:end_index_reduced].view(args.hidden_size,
+                                                                                  2 * args.hidden_size))
+            # mlp 4h to h bias ,sharded by last dim
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_4h_to_h_bias"]
+            end_index_reduced = start_index_reduced + self.layer_weight_numel_count["mlp_dense_4h_to_h_bias"]
+            self.data[start_index:end_index].copy_(self.top_half_data[start_index_reduced:end_index_reduced])
+            start_index = end_index
+            start_index_reduced = end_index_reduced
+
+    def shard_grad(self):
+        """
+        把dp组中单卡的梯度拆成TP分组后的结果，
+        针对的情形是：
+        有的DP组中某层的梯度只在一张卡上（未TP），其他DP组中该层做了TP，方便1对多的梯度聚合
+        """
+        assert not parallel_state.is_tensor_parallel(), "TP group should not shard grad to sync grad"
+        start_index = 0
+        rank = torch.distributed.get_rank()
+        if rank == 4:
+            start_index = self.param_numel_count["embedding_weight"] + self.param_numel_count["layer_weight"] * 4
+        args = get_args()
+        # 每一个layer层的切分
+        # input_norm
+        for i in range(2):
+            end_index = start_index + self.layer_weight_numel_count["input_norm_weight"] + \
+                        self.layer_weight_numel_count[
+                            "input_norm_bias"]
+            input_norm = self.data[start_index:end_index].clone()
+            # attention qkv weight,sharded by first dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["attention_qkv_weight"]
+            attention_qkv_weight = self.data[start_index:end_index].clone()
+            attention_qkv_weight_top_half = attention_qkv_weight[:attention_qkv_weight.shape[0] // 2]
+            attention_qkv_weight_bottom_half = attention_qkv_weight[attention_qkv_weight.shape[0] // 2:]
+            # attention qkv bias,sharded by first dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["attention_qkv_bias"]
+            attention_qkv_bias = self.data[start_index:end_index].clone()
+            attention_qkv_bias_top_half = attention_qkv_bias[:attention_qkv_bias.shape[0] // 2]
+            attention_qkv_bias_bottom_half = attention_qkv_bias[attention_qkv_bias.shape[0] // 2:]
+            # attention dense weight，shared by last dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["attention_dense_weight"]
+            attention_dense_weight = self.data[start_index:end_index].clone().view(args.hidden_size, args.hidden_size)
+            attention_dense_weight_top_half = attention_dense_weight[:, :attention_dense_weight.shape[1] // 2].flatten()
+            attention_dense_weight_bottom_half = attention_dense_weight[:,
+                                                 attention_dense_weight.shape[1] // 2:].flatten()
+            # attention dense bias，The bias within the tp group should be the same, and direct all reduce is sufficient
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["attention_dense_bias"]
+            attention_dense_bias = self.data[start_index:end_index].clone()
+            # post attention norm weight and bias
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["post_attention_norm_weight"] + \
+                        self.layer_weight_numel_count["post_attention_norm_bias"]
+            post_attention_norm_weight_and_bias = self.data[start_index:end_index].clone()
+            # mlp h to 4h weight,sharded by first dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_h_to_4h_weight"]
+            mlp_h_to_4h_weight = self.data[start_index:end_index].clone()
+            mlp_h_to_4h_weight_top_half = mlp_h_to_4h_weight[:mlp_h_to_4h_weight.shape[0] // 2]
+            mlp_h_to_4h_weight_bottom_half = mlp_h_to_4h_weight[mlp_h_to_4h_weight.shape[0] // 2:]
+            # mlp h to 4h bias,sharded by first dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_h_to_4h_bias"]
+            mlp_h_to_4h_bias = self.data[start_index:end_index].clone()
+            mlp_h_to_4h_bias_top_half = mlp_h_to_4h_bias[:mlp_h_to_4h_bias.shape[0] // 2]
+            mlp_h_to_4h_bias_bottom_half = mlp_h_to_4h_bias[mlp_h_to_4h_bias.shape[0] // 2:]
+            # mlp 4h to h weight ,sharded by last dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_4h_to_h_weight"]
+            mlp_4h_to_h_weight = self.data[start_index:end_index].clone().view(args.hidden_size, 4 * args.hidden_size)
+            mlp_4h_to_h_weight_top_half = mlp_4h_to_h_weight[:, :mlp_4h_to_h_weight.shape[1] // 2].flatten()
+            mlp_4h_to_h_weight_bottom_half = mlp_4h_to_h_weight[:, mlp_4h_to_h_weight.shape[1] // 2:].flatten()
+            # mlp 4h to h bias ,sharded by last dim
+            start_index = end_index
+            end_index = start_index + self.layer_weight_numel_count["mlp_dense_4h_to_h_bias"]
+            mlp_4h_to_h_bias = self.data[start_index:end_index].clone()
+
+            self.top_half_data = torch.cat(
+                [self.top_half_data, input_norm, attention_qkv_weight_top_half, attention_qkv_bias_top_half,
+                 attention_dense_weight_top_half, attention_dense_bias, post_attention_norm_weight_and_bias,
+                 mlp_h_to_4h_weight_top_half, mlp_h_to_4h_bias_top_half, mlp_4h_to_h_weight_top_half, mlp_4h_to_h_bias],
+                dim=0)
+            self.bottom_half_data = torch.cat(
+                [self.bottom_half_data, input_norm, attention_qkv_weight_bottom_half, attention_qkv_bias_bottom_half,
+                 attention_dense_weight_bottom_half, attention_dense_bias, post_attention_norm_weight_and_bias,
+                 mlp_h_to_4h_weight_bottom_half, mlp_h_to_4h_bias_bottom_half, mlp_4h_to_h_weight_bottom_half,
+                 mlp_4h_to_h_bias],
+                dim=0)
+            start_index = end_index
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前top_half_data为{self.top_half_data},长度为:{self.top_half_data.shape}++++++++++++++++++++++++++++++++++")
+        print(
+            f"当前rank为{torch.distributed.get_rank()}，当前bottom_half_data为{self.bottom_half_data},长度为:{self.bottom_half_data.shape}++++++++++++++++++++++++++++++++++")
 
     def finish_grad_sync(self):
         """

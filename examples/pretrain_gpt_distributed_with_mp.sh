@@ -5,7 +5,7 @@
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 #export NCCL_DEBUG=INFO
 export NCCL_IB_GID_INDEX=3
-GPUS_PER_NODE=3
+GPUS_PER_NODE=8
 # Change for multinode config
 #MASTER_ADDR=localhost
 #MASTER_PORT=6000
@@ -13,10 +13,10 @@ GPUS_PER_NODE=3
 #NODE_RANK=0
 #WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-CHECKPOINT_PATH=/root/new/megatron-lm/checkpoints/gpt2 #自定义ckp路径
-VOCAB_FILE=/root/new/megatron-lm/data/gpt2-vocab.json
-MERGE_FILE=/root/new/megatron-lm/data/gpt2-merges.txt
-DATA_PATH=/root/new/megatron-lm/data/meg-gpt2-oscar-en-10k_text_document
+CHECKPOINT_PATH=/root/Megatron-LM/checkpoints/gpt2 #自定义ckp路径
+VOCAB_FILE=/root/Megatron-LM/data/gpt2-vocab.json
+MERGE_FILE=/root/Megatron-LM/data/gpt2-merges.txt
+DATA_PATH=/root/Megatron-LM/data/meg-gpt2-oscar-en-10k_text_document
 
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
@@ -28,9 +28,9 @@ DISTRIBUTED_ARGS="
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 3 \
+    --pipeline-model-parallel-size 8 \
     --sequence-parallel \
-    --num-layers 12 \
+    --num-layers 30 \
     --hidden-size 1024 \
     --num-attention-heads 16 \
     --seq-length 1024 \
