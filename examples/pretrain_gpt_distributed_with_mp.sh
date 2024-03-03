@@ -4,6 +4,7 @@
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 #export NCCL_DEBUG=INFO
+#export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export NCCL_IB_GID_INDEX=3
 GPUS_PER_NODE=8
 # Change for multinode config
@@ -30,13 +31,13 @@ GPT_ARGS="
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 16 \
     --sequence-parallel \
-    --num-layers 24 \
+    --num-layers 15 \
     --hidden-size 4096 \
     --num-attention-heads 32 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
-    --micro-batch-size 4 \
-    --global-batch-size 32 \
+    --micro-batch-size 16 \
+    --global-batch-size 128 \
     --lr 0.00015 \
     --train-iters 500000 \
     --lr-decay-iters 320000 \
