@@ -31,11 +31,11 @@ GPT_ARGS="
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 16 \
     --sequence-parallel \
-    --num-layers 15 \
+    --num-layers 16 \
     --hidden-size 4096 \
     --num-attention-heads 32 \
-    --seq-length 1024 \
-    --max-position-embeddings 1024 \
+    --seq-length 2048 \
+    --max-position-embeddings 2048 \
     --micro-batch-size 16 \
     --global-batch-size 128 \
     --lr 0.00015 \
