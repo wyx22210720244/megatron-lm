@@ -458,7 +458,7 @@ def train_step(forward_step_func, data_iterator,
         micro_batch_size=args.micro_batch_size,
         decoder_seq_length=args.decoder_seq_length,
         forward_only=False)
-    print(f"rank is {torch.distributed.get_rank()}, 已经执行完losses_reduced")
+    # print(f"rank is {torch.distributed.get_rank()}, 已经执行完losses_reduced")
     # Empty unused memory.
     if args.empty_unused_memory_level >= 1:
         torch.cuda.empty_cache()
@@ -470,9 +470,9 @@ def train_step(forward_step_func, data_iterator,
 
     # Update parameters.
     timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    print(f"rank is {torch.distributed.get_rank()}, 即将执行optimizer")
+    # print(f"rank is {torch.distributed.get_rank()}, 即将执行optimizer")
     update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
-    print(f"rank is {torch.distributed.get_rank()}, update_successful is {update_successful}")
+    # print(f"rank is {torch.distributed.get_rank()}, update_successful is {update_successful}")
     timers('optimizer').stop()
 
     # Vision momentum.
@@ -1126,6 +1126,7 @@ def build_train_valid_test_data_loaders(
         train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
             build_train_valid_test_datasets_provider)
         # Build dataloders.
+        print(f"rank is {torch.distributed.get_rank()}, consumed_train_samples is {args.consumed_train_samples}")
         train_dataloader = build_pretraining_data_loader(
             train_ds, args.consumed_train_samples)
         if args.skip_train:

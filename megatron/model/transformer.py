@@ -1457,8 +1457,8 @@ class ParallelTransformer(MegatronModule):
         self.checkpoint_core_attention = config.recompute_granularity == 'selective'
 
         # Number of layers.
-        self.num_layers = _get_num_layers(args, model_type,
-                                          layer_type==LayerType.decoder)
+        # self.num_layers = _get_num_layers(args, model_type,
+        #                                   layer_type==LayerType.decoder)
         self.num_layers = mpu.get_data_parallel_num_layer()
 
         self.drop_path_rates = [
