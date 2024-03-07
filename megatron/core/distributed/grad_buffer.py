@@ -98,7 +98,7 @@ class Bucket:
         ), 'Should not have multiple communication calls in flight at once'
         rank = torch.distributed.get_rank()
         self.data /= self.data_parallel_world_size
-        print("当前rank是{torch.distributed.get_rank()}开始all-reduce++++++++++++++++++++++++++++++++++")
+        # print("当前rank是{torch.distributed.get_rank()}开始all-reduce++++++++++++++++++++++++++++++++++")
         data_parallel_group = parallel_state.get_data_parallel_group()
         data_parallel_layer = parallel_state.get_data_parallel_global_layers()
         start_index = 0

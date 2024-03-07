@@ -148,7 +148,7 @@ def finalize_model_grads(model: List[torch.nn.Module]):
         model_chunk.finish_grad_sync()
     if config.timers is not None:
         config.timers('all-grads-sync').stop()
-    print("rank is {} finish dp grad sync".format(torch.distributed.get_rank()))
+    # print("rank is {} finish dp grad sync".format(torch.distributed.get_rank()))
     # All-reduce layer-norm grads (for sequence parallelism).
     if config.timers is not None:
         config.timers('layernorm-grads-all-reduce', log_level=1).start(
@@ -164,7 +164,7 @@ def finalize_model_grads(model: List[torch.nn.Module]):
             barrier=config.barrier_with_L1_time
         )
     _allreduce_embedding_grads(model, config)
-    print("rank is {} finish embedding grad sync".format(torch.distributed.get_rank()))
+    # print("rank is {} finish embedding grad sync".format(torch.distributed.get_rank()))
     if config.timers is not None:
         config.timers('embedding-grads-all-reduce').stop()
 
@@ -176,4 +176,4 @@ def finalize_model_grads(model: List[torch.nn.Module]):
     _allreduce_expert_grads(model, config)
     if config.timers is not None:
         config.timers('expert-grads-all-reduce').stop()
-    print("rank is {} finish xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".format(torch.distributed.get_rank()))
+    # print("rank is {} finish xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".format(torch.distributed.get_rank()))

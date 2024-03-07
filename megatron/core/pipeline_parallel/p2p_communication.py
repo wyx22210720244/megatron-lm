@@ -125,80 +125,84 @@ def _batched_p2p_ops(
     tensor_recv_next: Optional[torch.Tensor],
     group: torch.distributed.ProcessGroup
 ):
-    reqs = []
+    ops = []
     if tensor_send_prev is not None:
-        rank_prev = get_pipeline_model_parallel_prev_rank()
-        for idx,rank in enumerate(rank_prev):
-            send_prev_op = torch.distributed.isend(
-                tensor_send_prev,
-                rank,
-                group[idx],
-            )
-            reqs.append(send_prev_op)
+        # rank_prev = get_pipeline_model_parallel_prev_rank()
+        # print(f"rank is {torch.distributed.get_rank()},send_prev_rank is {rank_prev}")
+        # for idx,rank in enumerate(rank_prev):
+        #     send_prev_op = torch.distributed.isend(
+        #         tensor_send_prev,
+        #         rank,
+        #         group[idx],
+        #     )
+        #     reqs.append(send_prev_op)
         # 原代码
-        # send_prev_op = torch.distributed.P2POp(
-        #     torch.distributed.isend,
-        #     tensor_send_prev,
-        #     get_pipeline_model_parallel_prev_rank(),
-        #     group,
-        # )
-        # ops.append(send_prev_op)
+        send_prev_op = torch.distributed.P2POp(
+            torch.distributed.isend,
+            tensor_send_prev,
+            get_pipeline_model_parallel_prev_rank()[0],
+            group[0],
+        )
+        ops.append(send_prev_op)
     if tensor_recv_prev is not None:
-        rank_prev = get_pipeline_model_parallel_prev_rank()
-        for idx,rank in enumerate(rank_prev):
-            recv_prev_op = torch.distributed.irecv(
-                tensor_recv_prev,
-                rank,
-                group[idx],
-            )
-            reqs.append(recv_prev_op)
+        # rank_prev = get_pipeline_model_parallel_prev_rank()
+        # print("接收上游梯度")
+        # for idx,rank in enumerate(rank_prev):
+        #     recv_prev_op = torch.distributed.irecv(
+        #         tensor_recv_prev,
+        #         rank,
+        #         group[idx],
+        #     )
+        #     reqs.append(recv_prev_op)
         # 原代码
-        # recv_prev_op = torch.distributed.P2POp(
-        #     torch.distributed.irecv,
-        #     tensor_recv_prev,
-        #     get_pipeline_model_parallel_prev_rank(),
-        #     group,
-        # )
-        # ops.append(recv_prev_op)
+        recv_prev_op = torch.distributed.P2POp(
+            torch.distributed.irecv,
+            tensor_recv_prev,
+            get_pipeline_model_parallel_prev_rank()[0],
+            group[0],
+        )
+        ops.append(recv_prev_op)
     if tensor_send_next is not None:
-        rank_next = get_pipeline_model_parallel_next_rank()
-        for idx,rank in enumerate(rank_next):
-            send_next_op = torch.distributed.isend(
-                tensor_send_next,
-                rank,
-                group[idx],
-            )
-            reqs.append(send_next_op)
+        # rank_next = get_pipeline_model_parallel_next_rank()
+        # print(f"rank is {torch.distributed.get_rank()},send_next_rank is {rank_next}")
+        # for idx,rank in enumerate(rank_next):
+        #     send_next_op = torch.distributed.isend(
+        #         tensor_send_next,
+        #         rank,
+        #         group[idx],
+        #     )
+        #     reqs.append(send_next_op)
+        # print(f"rank is {torch.distributed.get_rank()},send_next_op is finish")
         # 原代码
-        # send_next_op = torch.distributed.P2POp(
-        #     torch.distributed.isend,
-        #     tensor_send_next,
-        #     get_pipeline_model_parallel_next_rank(),
-        #     group,
-        # )
-        # ops.append(send_next_op)
+        send_next_op = torch.distributed.P2POp(
+            torch.distributed.isend,
+            tensor_send_next,
+            get_pipeline_model_parallel_next_rank()[0],
+            group[0],
+        )
+        ops.append(send_next_op)
     if tensor_recv_next is not None:
-        rank_next = get_pipeline_model_parallel_next_rank()
-        for idx,rank in enumerate(rank_next):
-            recv_next_op = torch.distributed.irecv(
-                tensor_recv_next,
-                rank,
-                group[idx],
-            )
-            reqs.append(recv_next_op)
+        # rank_next = get_pipeline_model_parallel_next_rank()
+        # for idx,rank in enumerate(rank_next):
+        #     recv_next_op = torch.distributed.irecv(
+        #         tensor_recv_next,
+        #         rank,
+        #         group[idx],
+        #     )
+        #     reqs.append(recv_next_op)
         # 原代码
-        # recv_next_op = torch.distributed.P2POp(
-        #     torch.distributed.irecv,
-        #     tensor_recv_next,
-        #     get_pipeline_model_parallel_next_rank(),
-        #     group,
-        # )
-        # ops.append(recv_next_op)
+        recv_next_op = torch.distributed.P2POp(
+            torch.distributed.irecv,
+            tensor_recv_next,
+            get_pipeline_model_parallel_next_rank()[0],
+            group[0],
+        )
+        ops.append(recv_next_op)
     # 批量启动点对点的通信操作
-    # if len(req) > 0:
-    #     reqs = torch.distributed.batch_isend_irecv(ops)
-    # else:
-    #     reqs = []
+    if len(ops) > 0:
+        reqs = torch.distributed.batch_isend_irecv(ops)
+    else:
+        reqs = []
     return reqs
 
 
@@ -358,7 +362,7 @@ def _communicate(
 
         p2p_func = _ring_exchange_wrapper
     elif config.batch_p2p_comm:
-        # print("Using batched p2p")
+        # print(f"rank is {torch.distributed.get_rank()}Using batched p2p")
         # p2p通信入口
         assert wait_on_reqs
         p2p_func = _batched_p2p_ops
@@ -484,6 +488,7 @@ def send_forward_recv_backward(
     See _communicate for argument details.
     """
     if core.parallel_state.is_pipeline_last_stage():
+        # print(f"rank{torch.distributed.get_rank()}is_pipeline_last_stage")
         output_tensor_grad = None
     else:
         if config.timers is not None:

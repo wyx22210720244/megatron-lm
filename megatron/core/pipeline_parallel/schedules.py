@@ -1027,9 +1027,11 @@ def send_forward_recv_backward(output_tensors, tensor_shapes, config):
         if tensor_shape is None:
             output_tensor_grads.append(None)
             continue
+        # print(f"当前rank是{torch.distributed.get_rank()}begin p2p comm")
         output_tensor_grad = p2p_communication.send_forward_recv_backward(
             output_tensor, tensor_shape, config
         )
+        # print(f"当前rank是{torch.distributed.get_rank()}end p2p comm")
         output_tensor_grads.append(output_tensor_grad)
     return output_tensor_grads
 
@@ -1065,7 +1067,7 @@ def forward_backward_pipelining_without_interleaving(
     stages.
 
     Returns dictionary with losses if the last stage, empty dict otherwise."""
-
+    # print(f"当前rank是{torch.distributed.get_rank()}forward_backward_pipelining_without_interleaving")
     if isinstance(model, list):
         assert (
             len(model) == 1
@@ -1169,6 +1171,7 @@ def forward_backward_pipelining_without_interleaving(
             checkpoint_activations_microbatch = None
 
         input_tensor = recv_forward(recv_tensor_shapes, config)
+        # print(f"rank is {torch.distributed.get_rank()}start forward_step")
         # 如果有TP，此处返回的是TP的reduce过的输出
         output_tensor = forward_step(
             forward_step_func,
@@ -1182,7 +1185,7 @@ def forward_backward_pipelining_without_interleaving(
             checkpoint_activations_microbatch,
         )
         send_forward(output_tensor, send_tensor_shapes, config)
-
+        # print(f"rank is {torch.distributed.get_rank()}finish forward_step")
         if not forward_only:
             input_tensors.append(input_tensor)
             output_tensors.append(output_tensor)
@@ -1195,6 +1198,7 @@ def forward_backward_pipelining_without_interleaving(
         input_tensor = recv_forward(recv_tensor_shapes, config)
 
     # Run 1F1B in steady state.
+    #print(f"rank is {torch.distributed.get_rank()}start 1F1B")
     for i in range(num_microbatches_remaining):
         last_iteration = i == (num_microbatches_remaining - 1)
 
@@ -1217,7 +1221,7 @@ def forward_backward_pipelining_without_interleaving(
             collect_non_loss_data,
             checkpoint_activations_microbatch,
         )
-
+        # print(f"rank is {torch.distributed.get_rank()}finish 1f1b forward_step")
         if forward_only:
             send_forward(output_tensor, send_tensor_shapes, config)
 
@@ -1226,10 +1230,11 @@ def forward_backward_pipelining_without_interleaving(
 
         else:
             # 发送当前的前向结果，并且接受下游传上来的梯度
+            # print(f"rank is {torch.distributed.get_rank()}begin send_forward_recv_backward")
             output_tensor_grad = send_forward_recv_backward(
                 output_tensor, send_tensor_shapes, config
             )
-
+            # print(f"rank is {torch.distributed.get_rank()}finish send_forward_recv_backward")
             # Add input_tensor and output_tensor to end of list.
             input_tensors.append(input_tensor)
             output_tensors.append(output_tensor)
@@ -1249,15 +1254,17 @@ def forward_backward_pipelining_without_interleaving(
             input_tensor_grad = backward_step(
                 input_tensor, output_tensor, output_tensor_grad, model_type, config
             )
-
+            # print(f"rank is {torch.distributed.get_rank()}finish backward_step")
             if last_iteration:
                 input_tensor = None
                 send_backward(input_tensor_grad, recv_tensor_shapes, config)
             else:
+                # print(f"rank is {torch.distributed.get_rank()}begin send_backward_recv_forward")
                 input_tensor = send_backward_recv_forward(
                     input_tensor_grad, recv_tensor_shapes, config
                 )
-
+                # print(f"rank is {torch.distributed.get_rank()}finish send_backward_recv_forward")
+    # print(f"rank is {torch.distributed.get_rank()}begin cooldown backward passes")
     # Run cooldown backward passes.
     if not forward_only:
         for i in range(num_warmup_microbatches):
@@ -1290,11 +1297,12 @@ def forward_backward_pipelining_without_interleaving(
 
     if config.timers is not None:
         config.timers('forward-backward').stop()
+    # print(f"rank is {torch.distributed.get_rank()}finish forward_backward_pipelining_without_interleaving")
 
     if config.finalize_model_grads_func is not None and not forward_only:
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
         config.finalize_model_grads_func([model])
-    print(f"rank is {torch.distributed.get_rank()}finish finalize_model_grads_func")
+    # print(f"rank is {torch.distributed.get_rank()}finish finalize_model_grads_func")
     return forward_data_store
