@@ -5,7 +5,7 @@
 import os
 import sys
 import torch
-
+import json
 from megatron import dist_signal_handler
 from megatron.tokenizer import build_tokenizer
 from .microbatches import build_num_microbatches_calculator
@@ -94,7 +94,10 @@ def set_global_variables(args, build_tokenizer=True):
 
     _ensure_var_is_not_initialized(_GLOBAL_ARGS, 'args')
     set_args(args)
-
+    group_allocation = json.load(open("allocations.json"))
+    args.data_parallel_size = 0
+    for key,gpus in group_allocation.items():
+        args.data_parallel_size +=1
     _build_num_microbatches_calculator(args)
     if build_tokenizer:
         _ = _build_tokenizer(args)

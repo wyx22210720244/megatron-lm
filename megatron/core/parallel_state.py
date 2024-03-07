@@ -125,7 +125,7 @@ def initialize_model_parallel(
     for key, value in group_allocation.items():
         for gpu in value:
             if isinstance(gpu, list):
-                gpu_count += 2
+                gpu_count += len(gpu)
             else:
                 gpu_count += 1
         data_parallel_size += 1
