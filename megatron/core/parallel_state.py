@@ -243,6 +243,40 @@ def initialize_model_parallel(
             dp_group_comm[key].append(dp_group_comm_2[key])
             dp_group_comm[key].append(dp_group_comm_3[key])
             dp_group_comm[key].append(dp_group_comm_4[key])
+    if tp_size ==8:
+        dp_group_comm_1 = defaultdict(list)
+        dp_group_comm_2 = defaultdict(list)
+        dp_group_comm_3 = defaultdict(list)
+        dp_group_comm_4 = defaultdict(list)
+        dp_group_comm_5 = defaultdict(list)
+        dp_group_comm_6 = defaultdict(list)
+        dp_group_comm_7 = defaultdict(list)
+        dp_group_comm_8 = defaultdict(list)
+        group_idx = 0
+        for layer in sorted_unique_intervals:
+            for dp_group, gpus in group_allocation.items():
+                for idx, gpu in enumerate(gpus):
+                    if layer_allocation[dp_group][idx] >= layer:
+                        dp_group_comm_1[group_idx].append(gpu[0])
+                        dp_group_comm_2[group_idx].append(gpu[1])
+                        dp_group_comm_3[group_idx].append(gpu[2])
+                        dp_group_comm_4[group_idx].append(gpu[3])
+                        dp_group_comm_5[group_idx].append(gpu[4])
+                        dp_group_comm_6[group_idx].append(gpu[5])
+                        dp_group_comm_7[group_idx].append(gpu[6])
+                        dp_group_comm_8[group_idx].append(gpu[7])
+                        break
+            group_idx += 1
+        dp_group_comm = defaultdict(list)
+        for key, _ in dp_group_comm_1.items():
+            dp_group_comm[key].append(dp_group_comm_1[key])
+            dp_group_comm[key].append(dp_group_comm_2[key])
+            dp_group_comm[key].append(dp_group_comm_3[key])
+            dp_group_comm[key].append(dp_group_comm_4[key])
+            dp_group_comm[key].append(dp_group_comm_5[key])
+            dp_group_comm[key].append(dp_group_comm_6[key])
+            dp_group_comm[key].append(dp_group_comm_7[key])
+            dp_group_comm[key].append(dp_group_comm_8[key])
     dp_layer_comm = []
     sorted_unique_intervals.insert(0, 0)
     for idx in range(1, len(sorted_unique_intervals)):
