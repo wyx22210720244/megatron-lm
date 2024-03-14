@@ -29,14 +29,14 @@ DISTRIBUTED_ARGS="
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 32 \
+    --pipeline-model-parallel-size 40 \
     --num-layers 32 \
     --hidden-size 4096 \
     --num-attention-heads 32 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
     --micro-batch-size 16 \
-    --global-batch-size 128 \
+    --global-batch-size 640 \
     --lr 0.00015 \
     --train-iters 500000 \
     --lr-decay-iters 320000 \
