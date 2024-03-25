@@ -15,7 +15,8 @@ import time
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
 import torch
-
+import torch.profiler
+import os
 from megatron import get_args
 from megatron import get_signal_handler
 from megatron import get_timers
@@ -779,13 +780,24 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         gc.collect()
 
     num_microbatches = get_num_microbatches()
-    while iteration < args.train_iters:
-        if args.profile and \
-           iteration == args.profile_step_start and \
-           torch.distributed.get_rank() in args.profile_ranks:
-            torch.cuda.cudart().cudaProfilerStart()
-            torch.autograd.profiler.emit_nvtx(record_shapes=True).__enter__()
+    rank = torch.distributed.get_rank()
 
+    # 为每个进程创建一个唯一的输出目录
+    log_dir = f'/root/megatron-lm/profile'
+    profiler = torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(skip_first=1,wait=5, warmup=2, active=5, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(log_dir),
+        record_shapes=True,
+        with_stack=True
+    )
+    profiler.start()
+    while iteration < args.train_iters:
+        # if args.profile and \
+        #    iteration == args.profile_step_start and \
+        #    torch.distributed.get_rank() in args.profile_ranks:
+        #     torch.cuda.cudart().cudaProfilerStart()
+        #     torch.autograd.profiler.emit_nvtx(record_shapes=True).__enter__()
         # Update number of microbatches first without consistency check to decide if a
         # checkpoint should be saved. If the number of microbatches is different
         # from the previous iteration, save a checkpoint. Then run consistency check
@@ -808,6 +820,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        opt_param_scheduler,
                        config)
         iteration += 1
+        profiler.step()
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()
@@ -900,7 +913,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         if args.manual_gc:
             if args.manual_gc_interval != 0 and iteration % args.manual_gc_interval == 0:
                 gc.collect()
-
+    profiler.stop()
     # Flush TensorBoard and WandB writers.
     writer = get_tensorboard_writer()
     if writer:
