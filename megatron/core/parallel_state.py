@@ -204,6 +204,16 @@ def initialize_model_parallel(
             unique_layer_allocation.add(layer)
     sorted_unique_intervals = sorted(list(unique_layer_allocation))
     # print(f"sorted_unique_intervals:{sorted_unique_intervals}")
+    if tp_size ==1:
+        dp_group_comm = defaultdict(list)
+        group_idx = 0
+        for layer in sorted_unique_intervals:
+            for dp_group,gpus in group_allocation.items():
+                for idx,gpu in enumerate(gpus):
+                    if layer_allocation[dp_group][idx]>=layer:
+                        dp_group_comm[group_idx].append(gpu)
+                        break
+            group_idx+=1
     if tp_size ==2:
         dp_group_comm_up = defaultdict(list)
         dp_group_comm_down = defaultdict(list)

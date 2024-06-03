@@ -6,7 +6,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 #export NCCL_DEBUG=INFO
 #export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export NCCL_IB_GID_INDEX=3
-GPUS_PER_NODE=4
+GPUS_PER_NODE=2
 # Change for multinode config
 #MASTER_ADDR=localhost
 #MASTER_PORT=6000
@@ -29,7 +29,7 @@ DISTRIBUTED_ARGS="
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 1 \
+    --pipeline-model-parallel-size 2 \
     --num-layers 12 \
     --hidden-size 1024 \
     --num-attention-heads 32 \
@@ -57,7 +57,7 @@ DATA_ARGS="
 
 OUTPUT_ARGS="
     --log-interval 20 \
-    --save-interval 10000 \
+    --save-interval 100 \
     --eval-interval 1000 \
     --eval-iters 10
 "
@@ -67,5 +67,6 @@ torchrun $DISTRIBUTED_ARGS /root/dp/megatron-lm/pretrain_gpt.py \
     $DATA_ARGS \
     $OUTPUT_ARGS \
     --distributed-backend nccl \
-    --load $CHECKPOINT_PATH
+    --load $CHECKPOINT_PATH \
+    --save $CHECKPOINT_PATH
 
