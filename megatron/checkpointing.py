@@ -263,7 +263,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
 
     # Collect args, model, RNG.
     if not torch.distributed.is_initialized() \
-            or mpu.get_data_modulo_expert_parallel_rank() == 0:
+            or mpu.is_rank_in_dp_first_group():
 
         # Arguments, iteration, and model.
         state_dict = {}

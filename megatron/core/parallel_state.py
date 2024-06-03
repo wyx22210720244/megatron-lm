@@ -204,17 +204,17 @@ def initialize_model_parallel(
             unique_layer_allocation.add(layer)
     sorted_unique_intervals = sorted(list(unique_layer_allocation))
     # print(f"sorted_unique_intervals:{sorted_unique_intervals}")
-    if tp_size ==1:
+    if tp_size == 1:
         dp_group_comm = defaultdict(list)
         group_idx = 0
         for layer in sorted_unique_intervals:
-            for dp_group,gpus in group_allocation.items():
-                for idx,gpu in enumerate(gpus):
-                    if layer_allocation[dp_group][idx]>=layer:
+            for dp_group, gpus in group_allocation.items():
+                for idx, gpu in enumerate(gpus):
+                    if layer_allocation[dp_group][idx] >= layer:
                         dp_group_comm[group_idx].append(gpu)
                         break
-            group_idx+=1
-    if tp_size ==2:
+            group_idx += 1
+    if tp_size == 2:
         dp_group_comm_up = defaultdict(list)
         dp_group_comm_down = defaultdict(list)
         group_idx = 0
@@ -231,7 +231,7 @@ def initialize_model_parallel(
             dp_group_comm[key].append(dp_group_comm_up[key])
             dp_group_comm[key].append(dp_group_comm_down[key])
         print(f"dp_group_comm:{dp_group_comm}")
-    if tp_size ==4:
+    if tp_size == 4:
         dp_group_comm_1 = defaultdict(list)
         dp_group_comm_2 = defaultdict(list)
         dp_group_comm_3 = defaultdict(list)
@@ -253,7 +253,7 @@ def initialize_model_parallel(
             dp_group_comm[key].append(dp_group_comm_2[key])
             dp_group_comm[key].append(dp_group_comm_3[key])
             dp_group_comm[key].append(dp_group_comm_4[key])
-    if tp_size ==8:
+    if tp_size == 8:
         dp_group_comm_1 = defaultdict(list)
         dp_group_comm_2 = defaultdict(list)
         dp_group_comm_3 = defaultdict(list)
@@ -296,16 +296,16 @@ def initialize_model_parallel(
     for dp_group, layers in layer_allocation.items():
         pre = 0
         for idx, layer in enumerate(layers):
-            num_layer[dp_group].append(layer-pre)
+            num_layer[dp_group].append(layer - pre)
             pre = layer
     for dp_group, gpus in group_allocation.items():
         for idx, gpu in enumerate(gpus):
-            if rank in gpu :
+            if rank in gpu:
                 _DATA_PARALLEL_NUM_LAYER = num_layer[dp_group][idx]
                 if idx == 0:
                     _DATA_PARALLEL_OFFSETS = 0
                 else:
-                    _DATA_PARALLEL_OFFSETS = layer_allocation[dp_group][idx-1]-1
+                    _DATA_PARALLEL_OFFSETS = layer_allocation[dp_group][idx - 1] - 1
     for dp_group, gpus in dp_group_comm.items():
         for gpu in gpus:
             ranks = gpu
@@ -1220,9 +1220,10 @@ def get_pipeline_model_parallel_rank():
     pp_group = _PIPELINE_MODEL_PARALLEL_GROUP[0]
     rank = torch.distributed.get_rank()
     # return _PIPELINE_GLOBAL_RANKS[0].index(rank)
-    #print(f"当前rank是{torch.distributed.get_rank()},相对位置是{_PIPELINE_GLOBAL_RANKS[0].index(rank)}")
+    # print(f"当前rank是{torch.distributed.get_rank()},相对位置是{_PIPELINE_GLOBAL_RANKS[0].index(rank)}")
     return _PIPELINE_GLOBAL_RANKS[0].index(rank)
     # return torch.distributed.get_rank(group=pp_group)
+
 
 def get_pipeline_model_parallel_split_rank():
     """Return pipeline model parallel split rank."""
@@ -1384,11 +1385,11 @@ def get_pipeline_model_parallel_next_rank():
     """Return the global rank that follows the caller in the pipeline"""
     assert _PIPELINE_GLOBAL_RANKS, "Pipeline parallel group is not initialized"
     rank_in_pipeline = get_pipeline_model_parallel_rank()
-    #print(f"当前rank为{torch.distributed.get_rank()}rank_in_pipeline为{rank_in_pipeline}")
+    # print(f"当前rank为{torch.distributed.get_rank()}rank_in_pipeline为{rank_in_pipeline}")
     world_size = get_pipeline_model_parallel_world_size()
     rank_next = []
     for idx, value in _PIPELINE_GLOBAL_RANKS.items():
-        #print(f"当前rank为{torch.distributed.get_rank()}value为{value}")
+        # print(f"当前rank为{torch.distributed.get_rank()}value为{value}")
         rank_next.append(value[(rank_in_pipeline + 1) % world_size])
     return rank_next
 
@@ -1638,3 +1639,10 @@ def get_data_parallel_num_layer():
 def get_data_parallel_offset():
     global _DATA_PARALLEL_OFFSETS
     return int(_DATA_PARALLEL_OFFSETS)
+
+
+# 判断当前rank是不是在dp组0中，存ckp操作只在dp组0中进行。
+def is_rank_in_dp_first_group():
+    group_allocation = json.load(open("allocations.json"))
+    rank = torch.distributed.get_rank()
+    return any(rank in subprocess for subprocess in group_allocation["0"])
