@@ -4,9 +4,11 @@
 
 import os
 import random
+import re
 import sys
 import numpy as np
-
+from collections import defaultdict
+from collections import OrderedDict
 import torch
 
 from megatron import update_num_microbatches
@@ -14,7 +16,6 @@ from megatron.core import mpu, tensor_parallel
 from .global_vars import get_args
 from .utils import (unwrap_model,
                     print_rank_0)
-
 
 _CHECKPOINT_VERSION = None
 
@@ -49,7 +50,7 @@ def check_checkpoint_args(checkpoint_args):
         args_value = getattr(args, arg_name)
         error_message = '{} value from checkpoint ({}) is not equal to the ' \
                         'input argument value ({}).'.format(
-                            arg_name, checkpoint_value, args_value)
+            arg_name, checkpoint_value, args_value)
         assert checkpoint_value == args_value, error_message
 
     _compare('num_layers')
@@ -74,7 +75,20 @@ def check_checkpoint_args(checkpoint_args):
 def ensure_directory_exists(filename):
     """Build filename's path if it does not already exists."""
     dirname = os.path.dirname(filename)
-    os.makedirs(dirname, exist_ok = True)
+    os.makedirs(dirname, exist_ok=True)
+
+
+def get_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, type=None):
+    """Determine the directory name for every layer checkpoint."""
+
+    directory = 'iter_{:07d}'.format(iteration)
+    comm_path = os.path.join(checkpoints_path, directory,
+                             f"{type}")
+    if layer_id == 'embedding' or layer_id == 'final_word_embedding':
+        return os.path.join(comm_path, f"layer_{layer_id}.pt")
+    else:
+        layer_id = layer_id + mpu.get_current_rank_start_layer()
+        return os.path.join(comm_path, f"layer_{layer_id:02d}.pt")
 
 
 def get_checkpoint_name(checkpoints_path, iteration, release=False,
@@ -104,10 +118,10 @@ def get_checkpoint_name(checkpoints_path, iteration, release=False,
     # data parallel rank.
     if not pipeline_parallel:
         common_path = os.path.join(checkpoints_path, directory,
-                            f'mp_rank_{tensor_rank:02d}')
+                                   f'mp_rank_{tensor_rank:02d}')
     else:
         common_path = os.path.join(checkpoints_path, directory,
-                f'mp_rank_{tensor_rank:02d}_{pipeline_rank:03d}')
+                                   f'mp_rank_{tensor_rank:02d}_{pipeline_rank:03d}')
 
     if expert_parallel:
         common_path = common_path + f'_{expert_rank:03d}'
@@ -165,7 +179,6 @@ def find_checkpoint_rank_0(checkpoints_path, iteration, release=False):
 
 
 def get_checkpoint_tracker_filename(checkpoints_path):
-
     """Tracker file rescords the latest chckpoint during
     training to restart from."""
     return os.path.join(checkpoints_path, 'latest_checkpointed_iteration.txt')
@@ -203,7 +216,7 @@ def read_metadata(tracker_filename):
             print('WARNING: on rank {} found iteration {} in the '
                   'metadata while max iteration across the ranks '
                   'is {}, replacing it with max iteration.'.format(
-                      rank, iteration, max_iter), flush=True)
+                rank, iteration, max_iter), flush=True)
     else:
         # When loading a checkpoint outside of training (for example,
         # when editing it), we might not have torch distributed
@@ -221,7 +234,7 @@ def get_rng_state():
         'torch_rng_state': torch.get_rng_state(),
         'cuda_rng_state': torch.cuda.get_rng_state(),
         'rng_tracker_states': tensor_parallel.get_cuda_rng_tracker().get_states()}
-
+    # 这里要启动random init才会all gather所有rank上的rng
     rng_state_list = None
     if torch.distributed.is_initialized() and \
             mpu.get_data_parallel_world_size() > 1 and \
@@ -260,6 +273,40 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
             get_distributed_optimizer_checkpoint_name(checkpoint_name)
         ensure_directory_exists(optim_checkpoint_name)
         optimizer.save_parameter_state(optim_checkpoint_name)
+    embedding_param = {}
+    layer_param = {}
+    final_word_embedding_param = {}
+    embedding_optimizer = {}
+    layer_optimizer = {}
+    final_word_embedding_optimizer = {}
+
+    def save_layer_parameters_and_opimizer_states(model_state_dict, opimizer_state_dict):
+        for key, value in model_state_dict['language_model'].items():
+            if key == 'embedding':
+                embedding_param[key] = value
+            else:
+                for name, tensor in value.items():
+                    if name.split('.')[0] == 'final_norm':
+                        layer_param[layer_number][name] = tensor
+                    else:
+                        layer_number = name.split('.')[1]
+                        if layer_number not in layer_param:
+                            layer_param[layer_number] = OrderedDict()
+                        layer_param[layer_number][name] = tensor
+        if 'word_embeddings_for_head' in model_state_dict:
+            final_word_embedding_param['word_embeddings_for_head'] = model_state_dict['word_embeddings_for_head']
+        embedding_param_checkpoint_name = get_layer_wise_checkpoint_name(args.save, iteration, 'embedding', 'param')
+        ensure_directory_exists(embedding_param_checkpoint_name)
+        torch.save(embedding_param, embedding_param_checkpoint_name)
+        for layer_id, param in layer_param.items():
+            layer_param_checkpoint_name = get_layer_wise_checkpoint_name(args.save, iteration, int(layer_id), 'param')
+            ensure_directory_exists(layer_param_checkpoint_name)
+            torch.save(param, layer_param_checkpoint_name)
+        if final_word_embedding_param:
+            final_word_embedding_param_checkpoint_name = get_layer_wise_checkpoint_name(args.save, iteration,
+                                                                                        'final_word_embedding', 'param')
+            ensure_directory_exists(final_word_embedding_param_checkpoint_name)
+            torch.save(final_word_embedding_param, final_word_embedding_param_checkpoint_name)
 
     # Collect args, model, RNG.
     if not torch.distributed.is_initialized() \
@@ -271,13 +318,14 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
         state_dict['checkpoint_version'] = 3.0
         state_dict['iteration'] = iteration
         if len(model) == 1:
+            # 模型的保存
             state_dict['model'] = model[0].state_dict_for_save_checkpoint()
         else:
             for i in range(len(model)):
                 mpu.set_virtual_pipeline_model_parallel_rank(i)
                 state_dict['model%d' % i] = \
                     model[i].state_dict_for_save_checkpoint()
-
+        save_layer_parameters_and_opimizer_states(state_dict['model'], state_dict)
         # Optimizer stuff.
         if not args.no_save_optim:
             if optimizer is not None:
@@ -289,7 +337,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
         # RNG states.
         if not args.no_save_rng:
             state_dict["rng_state"] = rng_state
-
+        print(f"state_dict:{state_dict}")
         # Save.
         ensure_directory_exists(checkpoint_name)
         torch.save(state_dict, checkpoint_name)
@@ -303,7 +351,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
 
     # And update the latest iteration
     if not torch.distributed.is_initialized() \
-       or torch.distributed.get_rank() == 0:
+            or torch.distributed.get_rank() == 0:
         tracker_filename = get_checkpoint_tracker_filename(args.save)
         with open(tracker_filename, 'w') as f:
             f.write(str(iteration))
@@ -342,8 +390,8 @@ def _transpose_first_dim(t, num_splits, num_splits_first, model):
 
         intermediate_shape = \
             (num_attention_heads_per_partition,
-             hidden_size_per_attention_head, num_splits) +\
-             input_shape[1:]
+             hidden_size_per_attention_head, num_splits) + \
+            input_shape[1:]
 
         t = t.view(*intermediate_shape)
         t = t.transpose(1, 2).contiguous()
@@ -358,7 +406,7 @@ def fix_query_key_value_ordering(model, checkpoint_version):
     """
     if checkpoint_version < 2.0:
         if isinstance(model, list):
-            assert len(model)==1
+            assert len(model) == 1
             model = model[0]
         for name, param in model.named_parameters():
             if name.endswith(('.query_key_value.weight', '.query_key_value.bias')):
@@ -383,6 +431,66 @@ def fix_query_key_value_ordering(model, checkpoint_version):
                      " checkpoint version {}".format(checkpoint_version))
 
 
+def get_state_dict():
+    pass
+
+
+def _load_layer_wise_base_checkpoint(load_dir, rank0=False):
+    """ Load the base state_dict from the given directory
+    """
+    tracker_filename = get_checkpoint_tracker_filename(load_dir)
+    # iteration = read_metadata(tracker_filename)[0]
+    if not os.path.isfile(tracker_filename):
+        if not rank0:
+            print_rank_0('WARNING: could not find the metadata file {} '.format(
+                tracker_filename))
+            print_rank_0('    will not load any checkpoints and will start from '
+                         'random')
+        return None, False
+    iteration, release = read_metadata(tracker_filename)
+    print_rank_0(f' loading checkpoint from {load_dir} at iteration {iteration}')
+
+    state_dict = {'args': get_args(), 'checkpoint_version': 3.0, 'iteration': iteration,
+                  'model': {'language_model': {'encoder': OrderedDict()}}}
+    def replace_layer_number(key, old_num, new_num):
+        pattern = rf'(layers\.)(\d+)(\..*)'
+        return re.sub(pattern, rf'\g<1>{new_num}\g<3>', key)
+    # state_dict['model']['word_embeddings_for_head'] = {}
+    embedding_param = {}
+    layer_param = {}
+    new_layer_param = {}
+    new_param = OrderedDict()
+    final_word_embedding_param = {}
+    embedding_param_path = get_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param')
+    embedding_param = torch.load(embedding_param_path, map_location='cpu')
+    for i in range(mpu.get_current_rank_end_layer() + 1-mpu.get_current_rank_start_layer()):
+        layer_param_path = get_layer_wise_checkpoint_name(load_dir, iteration, i, 'param')
+        layer_param[i] = torch.load(layer_param_path, map_location='cpu')
+    print(f"当前rank是{torch.distributed.get_rank()},layer_param为{layer_param}")
+    for layer_id,param in layer_param.items():
+        new_layer_param[layer_id] = OrderedDict()
+        for param_name,tensor in param.items():
+            if 'layers' in param_name:
+                old_num = int(param_name.split('.')[1])
+                new_param_name = replace_layer_number(param_name, old_num, layer_id)
+                print(f"当前rank是{torch.distributed.get_rank()},param_name为{param_name},new_param_name为{new_param_name}")
+                new_layer_param[layer_id][new_param_name] = tensor
+            else:
+                new_layer_param[layer_id][param_name] = tensor
+
+    print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
+    final_word_embedding_param['word_embeddings_for_head'] = OrderedDict()
+    final_word_embedding_param['word_embeddings_for_head']['weight'] = embedding_param['embedding']['word_embeddings']['weight']
+    if mpu.is_pipeline_first_stage():
+        state_dict['model']['language_model']['embedding'] = embedding_param['embedding']
+    for layer_id, param in new_layer_param.items():
+        state_dict['model']['language_model']['encoder'].update(param)
+    if mpu.get_pipeline_model_parallel_world_size() >1 and mpu.is_pipeline_last_stage():
+        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']
+      
+    return state_dict,release
+
+
 def _load_base_checkpoint(load_dir, rank0=False):
     """ Load the base state_dict from the given directory
 
@@ -390,9 +498,11 @@ def _load_base_checkpoint(load_dir, rank0=False):
     """
 
     # Read the tracker file and set the iteration.
+    # 这里的tracker file中只有iter的信息，轮数,文件是latest_checkpointed_iteration.txt
     tracker_filename = get_checkpoint_tracker_filename(load_dir)
 
     # If no tracker file, return nothing
+    # 这里没有iter的信息，那么直接随机化参数
     if not os.path.isfile(tracker_filename):
         if not rank0:
             print_rank_0('WARNING: could not find the metadata file {} '.format(
@@ -403,6 +513,7 @@ def _load_base_checkpoint(load_dir, rank0=False):
 
     # Otherwise, read the tracker file and either set the iteration or
     # mark it as a release checkpoint.
+    # 检查在tracker file中的iter的信息，可以是轮数，也可以是release
     iteration, release = read_metadata(tracker_filename)
 
     # Checkpoint.
@@ -532,9 +643,9 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
     load_dir = getattr(args, load_arg)
 
     model = unwrap_model(model)
-
-    state_dict, checkpoint_name, release = _load_base_checkpoint(load_dir, rank0=False)
-
+    # 主要作用是拿到state—dict
+    # state_dict, checkpoint_name, release = _load_base_checkpoint(load_dir, rank0=False)
+    state_dict,release = _load_layer_wise_base_checkpoint(load_dir, rank0=False)
     # Checkpoint not loaded.
     if state_dict is None:
 
@@ -562,9 +673,9 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
             except KeyError:
                 print_rank_0('A metadata file exists but unable to load '
                              'iteration from checkpoint {}, exiting'.format(
-                                 checkpoint_name))
+                    checkpoint_name))
                 sys.exit()
-
+    print(f"重组后的state_dict: {state_dict}")
     # Check arguments.
     assert args.consumed_train_samples == 0
     assert args.consumed_valid_samples == 0
@@ -578,7 +689,6 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
                                               'consumed_valid_samples', 0)
     else:
         print_rank_0('could not find arguments in the checkpoint ...')
-
     # Model.
     strict = False if args.retro_add_retriever or args.transformer_impl == 'transformer_engine' else strict
     if len(model) == 1:
@@ -613,7 +723,7 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
 
             # Load scheduler.
             if opt_param_scheduler is not None:
-                if 'lr_scheduler' in state_dict: # backward compatbility
+                if 'lr_scheduler' in state_dict:  # backward compatbility
                     opt_param_scheduler.load_state_dict(state_dict['lr_scheduler'])
                 else:
                     opt_param_scheduler.load_state_dict(state_dict['opt_param_scheduler'])

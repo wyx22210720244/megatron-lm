@@ -82,6 +82,9 @@ _TENSOR_AND_DATA_PARALLEL_GROUP_WITH_CP = None
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
+_CURRENT_RANK_START_LAYER = None
+_CURRENT_RANK_END_LAYER = None
+
 
 def get_nccl_options(pg_name, nccl_comm_cfgs):
     """Set the NCCL process group options.
@@ -192,8 +195,9 @@ def initialize_model_parallel(
     global _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP
     global _DATA_PARALLEL_NUM_LAYER
     global _DATA_PARALLEL_OFFSETS
+    global _CURRENT_RANK_START_LAYER
+    global _CURRENT_RANK_END_LAYER
     assert not _DATA_PARALLEL_GROUP, 'data parallel group is already initialized'
-    all_data_parallel_group_ranks_with_cp = []
     for key, value in group_allocation.items():
         for gpus in value:
             tp_size = len(gpus)
@@ -204,6 +208,16 @@ def initialize_model_parallel(
             unique_layer_allocation.add(layer)
     sorted_unique_intervals = sorted(list(unique_layer_allocation))
     # print(f"sorted_unique_intervals:{sorted_unique_intervals}")
+    for dp_group,gpus in group_allocation.items():
+        for idx,gpu in enumerate(gpus):
+            if rank in gpu :
+                if idx == 0:
+                    _CURRENT_RANK_START_LAYER = 0
+                else:
+                    _CURRENT_RANK_START_LAYER = layer_allocation[dp_group][idx-1]
+                _CURRENT_RANK_END_LAYER = layer_allocation[dp_group][idx]-1
+                break
+    print(f"_CURRENT_RANK_START_LAYER:{_CURRENT_RANK_START_LAYER}")
     if tp_size == 1:
         dp_group_comm = defaultdict(list)
         group_idx = 0
@@ -1646,3 +1660,11 @@ def is_rank_in_dp_first_group():
     group_allocation = json.load(open("allocations.json"))
     rank = torch.distributed.get_rank()
     return any(rank in subprocess for subprocess in group_allocation["0"])
+
+def get_current_rank_start_layer():
+    global _CURRENT_RANK_START_LAYER
+    return int(_CURRENT_RANK_START_LAYER)
+
+def get_current_rank_end_layer():
+    global _CURRENT_RANK_END_LAYER
+    return int(_CURRENT_RANK_END_LAYER)
