@@ -78,17 +78,35 @@ def ensure_directory_exists(filename):
     os.makedirs(dirname, exist_ok=True)
 
 
-def get_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, type=None):
+def save_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, type=None):
     """Determine the directory name for every layer checkpoint."""
 
     directory = 'iter_{:07d}'.format(iteration)
     comm_path = os.path.join(checkpoints_path, directory,
                              f"{type}")
+    tensor_rank = mpu.get_tensor_model_parallel_rank()
+    filename = 'tensor_size.txt'
+    file_path = os.path.join(comm_path, filename)
+    ensure_directory_exists(file_path)
+    with open(file_path, 'w', encoding='utf-8') as file:
+        file.write(str(mpu.get_tensor_model_parallel_world_size()))
+
     if layer_id == 'embedding' or layer_id == 'final_word_embedding':
-        return os.path.join(comm_path, f"layer_{layer_id}.pt")
+        return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
     else:
         layer_id = layer_id + mpu.get_current_rank_start_layer()
-        return os.path.join(comm_path, f"layer_{layer_id:02d}.pt")
+        return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")
+
+
+def load_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, type=None, tensor_rank=None):
+    directory = 'iter_{:07d}'.format(iteration)
+    comm_path = os.path.join(checkpoints_path, directory,
+                             f"{type}")
+    if layer_id == 'embedding' or layer_id == 'final_word_embedding':
+        return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
+    else:
+        layer_id = layer_id + mpu.get_current_rank_start_layer()
+        return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")
 
 
 def get_checkpoint_name(checkpoints_path, iteration, release=False,
@@ -182,6 +200,16 @@ def get_checkpoint_tracker_filename(checkpoints_path):
     """Tracker file rescords the latest chckpoint during
     training to restart from."""
     return os.path.join(checkpoints_path, 'latest_checkpointed_iteration.txt')
+
+
+def get_tensor_size_filename(checkpoints_path, iteration, type):
+    return os.path.join(checkpoints_path, 'iter_{:07d}'.format(iteration), f"{type}", 'tensor_size.txt')
+
+
+def read_tensor_size(tensor_size_filename):
+    with open(tensor_size_filename, 'r') as file:
+        tensor_size = int(file.read())
+    return tensor_size
 
 
 def read_metadata(tracker_filename):
@@ -295,16 +323,17 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
                         layer_param[layer_number][name] = tensor
         if 'word_embeddings_for_head' in model_state_dict:
             final_word_embedding_param['word_embeddings_for_head'] = model_state_dict['word_embeddings_for_head']
-        embedding_param_checkpoint_name = get_layer_wise_checkpoint_name(args.save, iteration, 'embedding', 'param')
+        embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'embedding', 'param')
         ensure_directory_exists(embedding_param_checkpoint_name)
         torch.save(embedding_param, embedding_param_checkpoint_name)
         for layer_id, param in layer_param.items():
-            layer_param_checkpoint_name = get_layer_wise_checkpoint_name(args.save, iteration, int(layer_id), 'param')
+            layer_param_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, int(layer_id), 'param')
             ensure_directory_exists(layer_param_checkpoint_name)
             torch.save(param, layer_param_checkpoint_name)
         if final_word_embedding_param:
-            final_word_embedding_param_checkpoint_name = get_layer_wise_checkpoint_name(args.save, iteration,
-                                                                                        'final_word_embedding', 'param')
+            final_word_embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration,
+                                                                                         'final_word_embedding',
+                                                                                         'param')
             ensure_directory_exists(final_word_embedding_param_checkpoint_name)
             torch.save(final_word_embedding_param, final_word_embedding_param_checkpoint_name)
 
@@ -340,6 +369,7 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
         print(f"state_dict:{state_dict}")
         # Save.
         ensure_directory_exists(checkpoint_name)
+
         torch.save(state_dict, checkpoint_name)
 
     # Wait so everyone is done (necessary)
@@ -435,6 +465,132 @@ def get_state_dict():
     pass
 
 
+def _concatenate_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration):
+    """Switch from parallelism with larger tensor-size
+    to parallelism with smaller size"""
+    args = get_args()
+    reduction_factor = tensor_size_pre // tensor_size
+    tensor_rank = mpu.get_tensor_model_parallel_rank()
+    layer_param = {}
+    new_layer_param = {}
+    final_word_embedding_param = {}
+
+    def _concatenate(layer_param, layer_id, layer_param_tem, key, dim):
+        for real_key, param in layer_param_tem.items():
+            if key in real_key:
+                tensor1 = layer_param[layer_id].get(real_key)
+                tensor2 = layer_param_tem.get(real_key)
+                if tensor1 is not None and tensor2 is not None:
+                    concatenated_tensor = torch.cat((tensor1, tensor2), dim=dim)
+                    layer_param[layer_id][real_key] = concatenated_tensor
+                else:
+                    assert f"one of the tensors for key {key} is None"
+
+    for rank in range(reduction_factor):
+        if rank == 0:
+            rank += tensor_rank * reduction_factor
+            embedding_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param', rank)
+            embedding_param = torch.load(embedding_param_path, map_location='cpu')
+        else:
+            rank += tensor_rank * reduction_factor
+            embedding_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param', rank)
+            embedding_param_tem = torch.load(embedding_param_path, map_location='cpu')
+            embedding_param['embedding']['word_embeddings']['weight'] = torch.cat((embedding_param['embedding'][
+                                                                                       'word_embeddings']['weight'],
+                                                                                   embedding_param_tem['embedding'][
+                                                                                       'word_embeddings']['weight']),
+                                                                             dim=0)
+    for layer_id in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
+        for rank in range(reduction_factor):
+            if rank == 0:
+                rank += tensor_rank * reduction_factor
+                layer_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, layer_id, 'param', rank)
+                layer_param[layer_id] = torch.load(layer_param_path, map_location='cpu')
+            else:
+                rank += tensor_rank * reduction_factor
+                layer_param_tem_path = load_layer_wise_checkpoint_name(load_dir, iteration, layer_id, 'param', rank)
+                layer_param_tem = torch.load(layer_param_tem_path, map_location='cpu')
+                _concatenate(layer_param, layer_id, layer_param_tem, 'attention.query_key_value.weight', 0)
+                _concatenate(layer_param, layer_id, layer_param_tem, 'attention.query_key_value.bias', 0)
+                _concatenate(layer_param, layer_id, layer_param_tem, 'self_attention.dense.weight', 1)
+                # _concatenate(layer_param,layer_id,layer_param_tem,'self_attention.dense.bias',0)
+                _concatenate(layer_param, layer_id, layer_param_tem, 'mlp.dense_h_to_4h.weight', 0)
+                _concatenate(layer_param, layer_id, layer_param_tem, 'mlp.dense_h_to_4h.bias', 0)
+                _concatenate(layer_param, layer_id, layer_param_tem, 'mlp.dense_4h_to_h.weight', 1)
+
+    new_layer_param = _replace_layer_param(layer_param)
+    print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
+    final_word_embedding_param['word_embeddings_for_head'] = OrderedDict()
+    final_word_embedding_param['word_embeddings_for_head']['weight'] = embedding_param['embedding']['word_embeddings'][
+        'weight']
+    if mpu.is_pipeline_first_stage():
+        state_dict['model']['language_model']['embedding'] = embedding_param['embedding']
+    for layer_id, param in new_layer_param.items():
+        state_dict['model']['language_model']['encoder'].update(param)
+    if mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_pipeline_last_stage():
+        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']        
+    return state_dict
+
+
+def _split_tensors(load_dir, state_dict):
+    """Switch from parallelism with smaller tensor-size
+    to parallelism with larger size"""
+    layer_param = {}
+    new_layer_param = {}
+    final_word_embedding_param = {}
+
+    return state_dict
+
+
+def _replace_layer_param(layer_param):
+    new_layer_param = {}
+    for layer_id, param in layer_param.items():
+        new_layer_param[layer_id] = OrderedDict()
+        for param_name, tensor in param.items():
+            if 'layers' in param_name:
+                old_num = int(param_name.split('.')[1])
+                new_param_name = replace_layer_number(param_name, old_num, layer_id)
+                print(
+                    f"当前rank是{torch.distributed.get_rank()},param_name为{param_name},new_param_name为{new_param_name}")
+                new_layer_param[layer_id][new_param_name] = tensor
+            else:
+                new_layer_param[layer_id][param_name] = tensor
+
+    print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
+    return new_layer_param
+
+def _equal_tensors(load_dir, state_dict, iteration):
+    """The transformed parallel has the same tensor-size
+    as the pre-transformed one"""
+    layer_param = {}
+    final_word_embedding_param = {}
+    tensor_rank = mpu.get_tensor_model_parallel_rank()
+    embedding_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param', tensor_rank)
+    embedding_param = torch.load(embedding_param_path, map_location='cpu')
+    for i in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
+        layer_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, i, 'param', tensor_rank)
+        layer_param[i] = torch.load(layer_param_path, map_location='cpu')
+    print(f"当前rank是{torch.distributed.get_rank()},layer_param为{layer_param}")
+    new_layer_param = _replace_layer_param(layer_param)
+    print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
+    final_word_embedding_param['word_embeddings_for_head'] = OrderedDict()
+    final_word_embedding_param['word_embeddings_for_head']['weight'] = embedding_param['embedding']['word_embeddings'][
+        'weight']
+    if mpu.is_pipeline_first_stage():
+        state_dict['model']['language_model']['embedding'] = embedding_param['embedding']
+    for layer_id, param in new_layer_param.items():
+        state_dict['model']['language_model']['encoder'].update(param)
+    if mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_pipeline_last_stage():
+        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']
+
+    return state_dict
+
+
+def replace_layer_number(key, old_num, new_num):
+    pattern = rf'(layers\.)(\d+)(\..*)'
+    return re.sub(pattern, rf'\g<1>{new_num}\g<3>', key)
+
+
 def _load_layer_wise_base_checkpoint(load_dir, rank0=False):
     """ Load the base state_dict from the given directory
     """
@@ -452,43 +608,18 @@ def _load_layer_wise_base_checkpoint(load_dir, rank0=False):
 
     state_dict = {'args': get_args(), 'checkpoint_version': 3.0, 'iteration': iteration,
                   'model': {'language_model': {'encoder': OrderedDict()}}}
-    def replace_layer_number(key, old_num, new_num):
-        pattern = rf'(layers\.)(\d+)(\..*)'
-        return re.sub(pattern, rf'\g<1>{new_num}\g<3>', key)
-    # state_dict['model']['word_embeddings_for_head'] = {}
-    embedding_param = {}
-    layer_param = {}
-    new_layer_param = {}
-    new_param = OrderedDict()
-    final_word_embedding_param = {}
-    embedding_param_path = get_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param')
-    embedding_param = torch.load(embedding_param_path, map_location='cpu')
-    for i in range(mpu.get_current_rank_end_layer() + 1-mpu.get_current_rank_start_layer()):
-        layer_param_path = get_layer_wise_checkpoint_name(load_dir, iteration, i, 'param')
-        layer_param[i] = torch.load(layer_param_path, map_location='cpu')
-    print(f"当前rank是{torch.distributed.get_rank()},layer_param为{layer_param}")
-    for layer_id,param in layer_param.items():
-        new_layer_param[layer_id] = OrderedDict()
-        for param_name,tensor in param.items():
-            if 'layers' in param_name:
-                old_num = int(param_name.split('.')[1])
-                new_param_name = replace_layer_number(param_name, old_num, layer_id)
-                print(f"当前rank是{torch.distributed.get_rank()},param_name为{param_name},new_param_name为{new_param_name}")
-                new_layer_param[layer_id][new_param_name] = tensor
-            else:
-                new_layer_param[layer_id][param_name] = tensor
 
-    print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
-    final_word_embedding_param['word_embeddings_for_head'] = OrderedDict()
-    final_word_embedding_param['word_embeddings_for_head']['weight'] = embedding_param['embedding']['word_embeddings']['weight']
-    if mpu.is_pipeline_first_stage():
-        state_dict['model']['language_model']['embedding'] = embedding_param['embedding']
-    for layer_id, param in new_layer_param.items():
-        state_dict['model']['language_model']['encoder'].update(param)
-    if mpu.get_pipeline_model_parallel_world_size() >1 and mpu.is_pipeline_last_stage():
-        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']
-      
-    return state_dict,release
+    # state_dict['model']['word_embeddings_for_head'] = {}
+    tensor_size = mpu.get_tensor_model_parallel_world_size()
+    tensor_size_file_name = get_tensor_size_filename(load_dir, iteration, 'param')
+    tensor_size_pre = read_tensor_size(tensor_size_file_name)
+    if tensor_size_pre < tensor_size:
+        state_dict = _split_tensors(load_dir, state_dict)
+    elif tensor_size_pre > tensor_size:
+        state_dict = _concatenate_tensors(load_dir, state_dict,tensor_size, tensor_size_pre, iteration)
+    else:
+        state_dict = _equal_tensors(load_dir, state_dict, iteration)
+    return state_dict, release
 
 
 def _load_base_checkpoint(load_dir, rank0=False):
@@ -645,7 +776,7 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
     model = unwrap_model(model)
     # 主要作用是拿到state—dict
     # state_dict, checkpoint_name, release = _load_base_checkpoint(load_dir, rank0=False)
-    state_dict,release = _load_layer_wise_base_checkpoint(load_dir, rank0=False)
+    state_dict, release = _load_layer_wise_base_checkpoint(load_dir, rank0=False)
     # Checkpoint not loaded.
     if state_dict is None:
 

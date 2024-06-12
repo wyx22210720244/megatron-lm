@@ -38,14 +38,16 @@ GPT_ARGS="
     --micro-batch-size 16 \
     --global-batch-size 128 \
     --lr 0.00015 \
-    --train-iters 100 \
+    --train-iters 200 \
     --lr-decay-iters 320000 \
     --lr-decay-style cosine \
     --min-lr 1.0e-5 \
     --weight-decay 1e-2 \
     --lr-warmup-fraction .01 \
     --clip-grad 1.0 \
-    --fp16
+    --fp16 \
+    --no-load-optim \
+    --no-load-rng
 "
 
 DATA_ARGS="
