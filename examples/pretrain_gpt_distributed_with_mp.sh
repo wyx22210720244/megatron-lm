@@ -30,7 +30,7 @@ DISTRIBUTED_ARGS="
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 2 \
-    --num-layers 12 \
+    --num-layers 16 \
     --hidden-size 1024 \
     --num-attention-heads 32 \
     --seq-length 1024 \
@@ -46,7 +46,6 @@ GPT_ARGS="
     --lr-warmup-fraction .01 \
     --clip-grad 1.0 \
     --fp16 \
-    --no-load-optim \
     --no-load-rng
 "
 
@@ -59,7 +58,7 @@ DATA_ARGS="
 
 OUTPUT_ARGS="
     --log-interval 20 \
-    --save-interval 100 \
+    --save-interval 50 \
     --eval-interval 1000 \
     --eval-iters 10
 "

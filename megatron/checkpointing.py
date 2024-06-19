@@ -91,7 +91,7 @@ def save_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, 
     with open(file_path, 'w', encoding='utf-8') as file:
         file.write(str(mpu.get_tensor_model_parallel_world_size()))
 
-    if layer_id == 'embedding' or layer_id == 'final_word_embedding':
+    if isinstance(layer_id, str):
         return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
     else:
         layer_id = layer_id + mpu.get_current_rank_start_layer()
@@ -102,7 +102,7 @@ def load_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, 
     directory = 'iter_{:07d}'.format(iteration)
     comm_path = os.path.join(checkpoints_path, directory,
                              f"{type}")
-    if layer_id == 'embedding' or layer_id == 'final_word_embedding':
+    if isinstance(layer_id, str):
         return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
     else:
         layer_id = layer_id + mpu.get_current_rank_start_layer()
@@ -301,14 +301,19 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
             get_distributed_optimizer_checkpoint_name(checkpoint_name)
         ensure_directory_exists(optim_checkpoint_name)
         optimizer.save_parameter_state(optim_checkpoint_name)
+    # 参数ckp
     embedding_param = {}
     layer_param = {}
     final_word_embedding_param = {}
-    embedding_optimizer = {}
+    # optimizer ckp
+    embedding_optimizer = {'fp32_from_fp16_params': []}
     layer_optimizer = {}
     final_word_embedding_optimizer = {}
+    param_group = {}
+    grad_scaler = {}
+    opt_param_scheduler_optimizer = {}
 
-    def save_layer_parameters_and_opimizer_states(model_state_dict, opimizer_state_dict):
+    def _save_layer_parameters(model_state_dict):
         for key, value in model_state_dict['language_model'].items():
             if key == 'embedding':
                 embedding_param[key] = value
@@ -337,15 +342,102 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
             ensure_directory_exists(final_word_embedding_param_checkpoint_name)
             torch.save(final_word_embedding_param, final_word_embedding_param_checkpoint_name)
 
+    def _save_layer_optimizer(optimizer_state_dict):
+        layer_num = 0
+        sign = 0
+        last_pp_rank = mpu.is_pipeline_last_stage()
+        if mpu.is_pipeline_first_stage() and mpu.get_pipeline_model_parallel_world_size()>1:
+            pp_sign = 1
+        else:
+            pp_sign = 0
+
+        param_group['param_groups'] = optimizer_state_dict['optimizer']['param_groups']
+        grad_scaler['grad_scaler'] = optimizer_state_dict['grad_scaler']
+        total_params = len(
+            optimizer_state_dict['fp32_from_fp16_params'][0]) + len(
+            optimizer_state_dict['fp32_from_fp16_params'][1])
+
+        def _get_param_group_idx(param_group, param_idx):
+            for idx, dict in enumerate(param_group):
+                if param_idx in dict['params']:
+                    return idx
+            assert "param_idx not in param_group"
+
+        print(
+            f"当前rank是{torch.distributed.get_rank()},fp32的长度是{len(optimizer_state_dict['fp32_from_fp16_params'])},第一维长度{len(optimizer_state_dict['fp32_from_fp16_params'][0])},第二维长度{len(optimizer_state_dict['fp32_from_fp16_params'][1])}")
+        # print(f"fp32{optimizer_state_dict['fp32_from_fp16_params']}")
+        for param_idx, param in optimizer_state_dict['optimizer']['state'].items():
+            param_group_idx = _get_param_group_idx(param_group['param_groups'], param_idx)
+            param_idx_tem = param_idx if param_idx < len(
+                optimizer_state_dict['fp32_from_fp16_params'][0]) else param_idx - len(
+                optimizer_state_dict['fp32_from_fp16_params'][0])
+            if mpu.is_pipeline_first_stage() and param_idx < 2:
+                embedding_optimizer[param_idx] = [param, param_group_idx]
+                embedding_optimizer['fp32_from_fp16_params'].append(
+                    optimizer_state_dict['fp32_from_fp16_params'][param_group_idx][param_idx])
+                sign = 2
+            elif pp_sign and param_idx == total_params - 1:
+                print(f"当前rank是{torch.distributed.get_rank()},param_idx为{param_idx}")
+                final_word_embedding_optimizer[0] = [param, param_group_idx]
+                final_word_embedding_optimizer['fp32_from_fp16_params'] = []
+                final_word_embedding_optimizer['fp32_from_fp16_params'].append(
+                    optimizer_state_dict['fp32_from_fp16_params'][param_group_idx][param_idx_tem])
+                print(
+                    f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
+            else:
+                if layer_num not in layer_optimizer:
+                    layer_optimizer[layer_num] = {'fp32_from_fp16_params': []}
+                if pp_sign and param_idx== total_params - 3:
+                    layer_optimizer[layer_num][12] = [param, param_group_idx]
+                elif pp_sign and param_idx == total_params - 2:
+                    layer_optimizer[layer_num][13] = [param, param_group_idx]
+                elif param_idx == total_params - 2:
+                    layer_optimizer[layer_num][12] = [param, param_group_idx]
+                elif param_idx == total_params - 1:
+                    layer_optimizer[layer_num][13] = [param, param_group_idx]
+                else:
+                    layer_optimizer[layer_num][(param_idx - sign) % 12] = [param, param_group_idx]
+                print(
+                    f"当前rank是{torch.distributed.get_rank()},param_idx为{param_idx},layer_num为{layer_num},param_group_idx为{param_group_idx}")
+                layer_optimizer[layer_num]['fp32_from_fp16_params'].append(
+                    optimizer_state_dict['fp32_from_fp16_params'][param_group_idx][param_idx_tem])
+                if (param_idx - sign + 1) % 12 == 0 and total_params - 12 > param_idx > sign:
+                    layer_num += 1
+        if embedding_optimizer:
+            print(f"embedding_optimizer:{embedding_optimizer}=====================================")
+            embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'embedding',
+                                                                                  'optimizer')
+            ensure_directory_exists(embedding_optimizer_checkpoint_name)
+            torch.save(embedding_optimizer, embedding_optimizer_checkpoint_name)
+        print(f"当前rank是{torch.distributed.get_rank()},layer_optimizer:{layer_optimizer}=====================================")
+        for layer_id, param in layer_optimizer.items():
+            layer_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, int(layer_id),
+                                                                              'optimizer')
+            ensure_directory_exists(layer_optimizer_checkpoint_name)
+            torch.save(param, layer_optimizer_checkpoint_name)
+        if final_word_embedding_optimizer:
+            print(
+                f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
+            final_word_embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration,
+                                                                                             'final_word_embedding',
+                                                                                             'optimizer')
+            ensure_directory_exists(final_word_embedding_optimizer_checkpoint_name)
+            torch.save(final_word_embedding_optimizer, final_word_embedding_optimizer_checkpoint_name)
+        if param_group:
+            param_group_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'meta', 'param_group')
+            ensure_directory_exists(param_group_checkpoint_name)
+            torch.save(param_group, param_group_checkpoint_name)
+        if grad_scaler:
+            grad_scaler_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'meta', 'grad_scaler')
+            ensure_directory_exists(grad_scaler_checkpoint_name)
+            torch.save(grad_scaler, grad_scaler_checkpoint_name)
+
     # Collect args, model, RNG.
     if not torch.distributed.is_initialized() \
             or mpu.is_rank_in_dp_first_group():
 
         # Arguments, iteration, and model.
-        state_dict = {}
-        state_dict['args'] = args
-        state_dict['checkpoint_version'] = 3.0
-        state_dict['iteration'] = iteration
+        state_dict = {'args': args, 'checkpoint_version': 3.0, 'iteration': iteration}
         if len(model) == 1:
             # 模型的保存
             state_dict['model'] = model[0].state_dict_for_save_checkpoint()
@@ -354,15 +446,20 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
                 mpu.set_virtual_pipeline_model_parallel_rank(i)
                 state_dict['model%d' % i] = \
                     model[i].state_dict_for_save_checkpoint()
-        save_layer_parameters_and_opimizer_states(state_dict['model'], state_dict)
+        _save_layer_parameters(state_dict['model'])
         # Optimizer stuff.
         if not args.no_save_optim:
             if optimizer is not None:
                 state_dict['optimizer'] = optimizer.state_dict()
+                _save_layer_optimizer(state_dict['optimizer'])
             if opt_param_scheduler is not None:
                 state_dict['opt_param_scheduler'] = \
                     opt_param_scheduler.state_dict()
-
+                opt_param_scheduler_optimizer['opt_param_scheduler'] = state_dict['opt_param_scheduler']
+                opt_param_scheduler_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'meta',
+                                                                                      'opt_param_scheduler')
+                ensure_directory_exists(opt_param_scheduler_checkpoint_name)
+                torch.save(opt_param_scheduler_optimizer, opt_param_scheduler_checkpoint_name)
         # RNG states.
         if not args.no_save_rng:
             state_dict["rng_state"] = rng_state
@@ -468,11 +565,9 @@ def get_state_dict():
 def _concatenate_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration):
     """Switch from parallelism with larger tensor-size
     to parallelism with smaller size"""
-    args = get_args()
     reduction_factor = tensor_size_pre // tensor_size
     tensor_rank = mpu.get_tensor_model_parallel_rank()
     layer_param = {}
-    new_layer_param = {}
     final_word_embedding_param = {}
 
     def _concatenate(layer_param, layer_id, layer_param_tem, key, dim):
@@ -499,7 +594,7 @@ def _concatenate_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, ite
                                                                                        'word_embeddings']['weight'],
                                                                                    embedding_param_tem['embedding'][
                                                                                        'word_embeddings']['weight']),
-                                                                             dim=0)
+                                                                                  dim=0)
     for layer_id in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
         for rank in range(reduction_factor):
             if rank == 0:
@@ -513,7 +608,6 @@ def _concatenate_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, ite
                 _concatenate(layer_param, layer_id, layer_param_tem, 'attention.query_key_value.weight', 0)
                 _concatenate(layer_param, layer_id, layer_param_tem, 'attention.query_key_value.bias', 0)
                 _concatenate(layer_param, layer_id, layer_param_tem, 'self_attention.dense.weight', 1)
-                # _concatenate(layer_param,layer_id,layer_param_tem,'self_attention.dense.bias',0)
                 _concatenate(layer_param, layer_id, layer_param_tem, 'mlp.dense_h_to_4h.weight', 0)
                 _concatenate(layer_param, layer_id, layer_param_tem, 'mlp.dense_h_to_4h.bias', 0)
                 _concatenate(layer_param, layer_id, layer_param_tem, 'mlp.dense_4h_to_h.weight', 1)
@@ -528,49 +622,47 @@ def _concatenate_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, ite
     for layer_id, param in new_layer_param.items():
         state_dict['model']['language_model']['encoder'].update(param)
     if mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_pipeline_last_stage():
-        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']        
+        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']
     return state_dict
 
 
-def _split_tensors(load_dir, state_dict):
+def _split_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration):
     """Switch from parallelism with smaller tensor-size
     to parallelism with larger size"""
     layer_param = {}
     new_layer_param = {}
     final_word_embedding_param = {}
-
-    return state_dict
-
-
-def _replace_layer_param(layer_param):
-    new_layer_param = {}
-    for layer_id, param in layer_param.items():
-        new_layer_param[layer_id] = OrderedDict()
-        for param_name, tensor in param.items():
-            if 'layers' in param_name:
-                old_num = int(param_name.split('.')[1])
-                new_param_name = replace_layer_number(param_name, old_num, layer_id)
-                print(
-                    f"当前rank是{torch.distributed.get_rank()},param_name为{param_name},new_param_name为{new_param_name}")
-                new_layer_param[layer_id][new_param_name] = tensor
-            else:
-                new_layer_param[layer_id][param_name] = tensor
-
-    print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
-    return new_layer_param
-
-def _equal_tensors(load_dir, state_dict, iteration):
-    """The transformed parallel has the same tensor-size
-    as the pre-transformed one"""
-    layer_param = {}
-    final_word_embedding_param = {}
+    reduction_factor = tensor_size // tensor_size_pre
     tensor_rank = mpu.get_tensor_model_parallel_rank()
-    embedding_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param', tensor_rank)
+    num_parts = mpu.get_tensor_model_parallel_world_size()
+
+    def _split(params, key, dim, tensor_rank, num_parts):
+        tensors = []
+        for real_key, param in params.items():
+            if key in real_key:
+                tensor = param
+                tensors = torch.split(tensor, tensor.size(dim) // num_parts, dim=dim)
+                params[real_key] = tensors[tensor_rank]
+        if tensors:
+            assert f"one of the tensors for key {key} is None"
+
+    rank = torch.distributed.get_rank()
+    obj_rank = rank // reduction_factor
+    # embedding param
+    embedding_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param', obj_rank)
     embedding_param = torch.load(embedding_param_path, map_location='cpu')
-    for i in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
-        layer_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, i, 'param', tensor_rank)
-        layer_param[i] = torch.load(layer_param_path, map_location='cpu')
-    print(f"当前rank是{torch.distributed.get_rank()},layer_param为{layer_param}")
+    _split(embedding_param['embedding']['word_embeddings'], 'weight', 0, tensor_rank, num_parts)
+    # layer param
+    for layer_id in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
+        layer_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, layer_id, 'param', obj_rank)
+        layer_param[layer_id] = torch.load(layer_param_path, map_location='cpu')
+        _split(layer_param[layer_id], 'attention.query_key_value.weight', 0, tensor_rank, num_parts)
+        _split(layer_param[layer_id], 'attention.query_key_value.bias', 0, tensor_rank, num_parts)
+        _split(layer_param[layer_id], 'self_attention.dense.weight', 1, tensor_rank, num_parts)
+        _split(layer_param[layer_id], 'mlp.dense_h_to_4h.weight', 0, tensor_rank, num_parts)
+        _split(layer_param[layer_id], 'mlp.dense_h_to_4h.bias', 0, tensor_rank, num_parts)
+        _split(layer_param[layer_id], 'mlp.dense_4h_to_h.weight', 1, tensor_rank, num_parts)
+
     new_layer_param = _replace_layer_param(layer_param)
     print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
     final_word_embedding_param['word_embeddings_for_head'] = OrderedDict()
@@ -582,7 +674,134 @@ def _equal_tensors(load_dir, state_dict, iteration):
         state_dict['model']['language_model']['encoder'].update(param)
     if mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_pipeline_last_stage():
         state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']
+    return state_dict
 
+
+def _replace_layer_param(layer_param):
+    new_layer_param = {}
+    for layer_id, param in layer_param.items():
+        new_layer_param[layer_id] = OrderedDict()
+        for param_name, tensor in param.items():
+            if 'layers' in param_name:
+                old_num = int(param_name.split('.')[1])
+                new_param_name = replace_layer_number(param_name, old_num, layer_id)
+                # print(
+                #     f"当前rank是{torch.distributed.get_rank()},param_name为{param_name},new_param_name为{new_param_name}")
+                new_layer_param[layer_id][new_param_name] = tensor
+            else:
+                new_layer_param[layer_id][param_name] = tensor
+
+    # print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
+    return new_layer_param
+
+
+def _equal_tensors(load_dir, state_dict, iteration):
+    """The transformed parallel has the same tensor-size
+    as the pre-transformed one"""
+
+    # param part
+    layer_param = {}
+    final_word_embedding_param = {}
+    tensor_rank = mpu.get_tensor_model_parallel_rank()
+    # embedding param
+    embedding_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'param', tensor_rank)
+    embedding_param = torch.load(embedding_param_path, map_location='cpu')
+    # layer param
+    for i in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
+        layer_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, i, 'param', tensor_rank)
+        layer_param[i] = torch.load(layer_param_path, map_location='cpu')
+    # print(f"当前rank是{torch.distributed.get_rank()},layer_param为{layer_param}")
+    new_layer_param = _replace_layer_param(layer_param)
+    # print(f"当前rank是{torch.distributed.get_rank()},new_layer_param为{new_layer_param}")
+    # final word embedding
+    final_word_embedding_param['word_embeddings_for_head'] = OrderedDict()
+    final_word_embedding_param['word_embeddings_for_head']['weight'] = embedding_param['embedding']['word_embeddings'][
+        'weight']
+    if mpu.is_pipeline_first_stage():
+        state_dict['model']['language_model']['embedding'] = embedding_param['embedding']
+    for layer_id, param in new_layer_param.items():
+        state_dict['model']['language_model']['encoder'].update(param)
+    if mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_pipeline_last_stage():
+        state_dict['model']['word_embeddings_for_head'] = final_word_embedding_param['word_embeddings_for_head']
+
+    # optimizer part
+    layer_optimizer = {}
+    optimizer_param_idx = 0
+    param_group_0 = []
+    param_group_1 = []
+    fp32_from_fp16_params = [[], []]
+    sign = 0
+    final_word_embedding_optimizer= {}
+    embedding_optimzier_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'optimizer',
+                                                               tensor_rank)
+    embedding_optimzier = torch.load(embedding_optimzier_path, map_location='cpu')
+    # print(f"当前rank是{torch.distributed.get_rank()},embedding_optimzier为{embedding_optimzier}")
+    for i in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
+        layer_optimizer_path = load_layer_wise_checkpoint_name(load_dir, iteration, i, 'optimizer', tensor_rank)
+        layer_optimizer[i] = torch.load(layer_optimizer_path, map_location='cpu')
+    print(f"当前rank是{torch.distributed.get_rank()},layer_optimizer为{layer_optimizer}")
+    param_group_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'meta', 'param_group', tensor_rank)
+    param_group = torch.load(param_group_path, map_location='cpu')
+    # print(f"当前rank是{torch.distributed.get_rank()},param_group为{param_group}")
+    opt_param_scheduler_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'meta', 'opt_param_scheduler',
+                                                               tensor_rank)
+    opt_param_scheduler = torch.load(opt_param_scheduler_path, map_location='cpu')
+    # print(f"当前rank是{torch.distributed.get_rank()},opt_param_scheduler为{opt_param_scheduler}")
+    grad_scaler_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'meta', 'grad_scaler', tensor_rank)
+    grad_scaler = torch.load(grad_scaler_path, map_location='cpu')
+    # print(f"当前rank是{torch.distributed.get_rank()},grad_scaler为{grad_scaler}")
+    final_word_embedding_optimizer_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'final_word_embedding',
+                                                                          'optimizer', tensor_rank)
+    if os.path.isfile(final_word_embedding_optimizer_path):
+        final_word_embedding_optimizer = torch.load(final_word_embedding_optimizer_path, map_location='cpu')
+    else:
+        final_word_embedding_optimizer[0] = embedding_optimzier[0]
+        final_word_embedding_optimizer['fp32_from_fp16_params'] = embedding_optimzier['fp32_from_fp16_params'][0]
+
+    # print(f"当前rank是{torch.distributed.get_rank()},final_word_embedding_optimizer为{final_word_embedding_optimizer}")
+    # 组装
+    if mpu.is_pipeline_first_stage():
+        for _ in range(2):
+            param_group_tem = embedding_optimzier[optimizer_param_idx][1]
+            state_dict['optimizer']['optimizer']['state'][optimizer_param_idx] = \
+            embedding_optimzier[optimizer_param_idx][0]
+            if param_group_tem:
+                param_group_1.append(optimizer_param_idx)
+                fp32_from_fp16_params[1].append(embedding_optimzier['fp32_from_fp16_params'][optimizer_param_idx])
+            else:
+                param_group_0.append(optimizer_param_idx)
+                fp32_from_fp16_params[0].append(embedding_optimzier['fp32_from_fp16_params'][optimizer_param_idx])
+            optimizer_param_idx += 1
+    for layer_id, param_dict in layer_optimizer.items():
+        k = 14 if layer_id == len(layer_optimizer) - 1 and mpu.is_pipeline_last_stage() else 12
+        print(f"当前rank是{torch.distributed.get_rank()},k值为{k},layer_optimizer的长度{len(layer_optimizer)}")
+        for i in range(k):
+            param_group_tem = param_dict[i][1]
+            state_dict['optimizer']['optimizer']['state'][optimizer_param_idx] = param_dict[i][0]
+            if param_group_tem:
+                param_group_1.append(optimizer_param_idx)
+                fp32_from_fp16_params[1].append(param_dict['fp32_from_fp16_params'][i])
+            else:
+                param_group_0.append(optimizer_param_idx)
+                fp32_from_fp16_params[0].append(param_dict['fp32_from_fp16_params'][i])
+            optimizer_param_idx += 1
+    if mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_pipeline_last_stage():
+        param_group_tem = final_word_embedding_optimizer[0][1]
+        state_dict['optimizer']['optimizer']['state'][optimizer_param_idx] = final_word_embedding_optimizer[0][0]
+        if param_group_tem:
+            param_group_1.append(optimizer_param_idx)
+            fp32_from_fp16_params[1].append(final_word_embedding_optimizer['fp32_from_fp16_params'][0])
+        else:
+            param_group_0.append(optimizer_param_idx)
+            fp32_from_fp16_params[0].append(final_word_embedding_optimizer['fp32_from_fp16_params'][0])
+        optimizer_param_idx += 1
+
+    param_group['param_groups'][0]['params'] = param_group_0
+    param_group['param_groups'][1]['params'] = param_group_1
+    state_dict['optimizer']['optimizer']['param_groups'] = param_group['param_groups']
+    state_dict['opt_param_scheduler'] = opt_param_scheduler['opt_param_scheduler']
+    state_dict['optimizer']['grad_scaler'] = grad_scaler['grad_scaler']
+    state_dict['optimizer']['fp32_from_fp16_params'] = fp32_from_fp16_params
     return state_dict
 
 
@@ -607,16 +826,18 @@ def _load_layer_wise_base_checkpoint(load_dir, rank0=False):
     print_rank_0(f' loading checkpoint from {load_dir} at iteration {iteration}')
 
     state_dict = {'args': get_args(), 'checkpoint_version': 3.0, 'iteration': iteration,
-                  'model': {'language_model': {'encoder': OrderedDict()}}}
+                  'model': {'language_model': {'embedding': {}, 'encoder': OrderedDict()}},
+                  'optimizer': {'optimizer': {'state': {}, 'param_groups': {}}}, 'opt_param_scheduler': {},
+                  'rng_state': {}}
 
     # state_dict['model']['word_embeddings_for_head'] = {}
     tensor_size = mpu.get_tensor_model_parallel_world_size()
     tensor_size_file_name = get_tensor_size_filename(load_dir, iteration, 'param')
     tensor_size_pre = read_tensor_size(tensor_size_file_name)
     if tensor_size_pre < tensor_size:
-        state_dict = _split_tensors(load_dir, state_dict)
+        state_dict = _split_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration)
     elif tensor_size_pre > tensor_size:
-        state_dict = _concatenate_tensors(load_dir, state_dict,tensor_size, tensor_size_pre, iteration)
+        state_dict = _concatenate_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration)
     else:
         state_dict = _equal_tensors(load_dir, state_dict, iteration)
     return state_dict, release
@@ -775,8 +996,9 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
 
     model = unwrap_model(model)
     # 主要作用是拿到state—dict
-    # state_dict, checkpoint_name, release = _load_base_checkpoint(load_dir, rank0=False)
+    # state_dict_origin, checkpoint_name, release = _load_base_checkpoint(load_dir, rank0=False)
     state_dict, release = _load_layer_wise_base_checkpoint(load_dir, rank0=False)
+    # print(f"当前rank是{torch.distributed.get_rank()},state_dict_origin为{state_dict_origin},state-dict为{state_dict}")
     # Checkpoint not loaded.
     if state_dict is None:
 
