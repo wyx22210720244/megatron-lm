@@ -1024,6 +1024,10 @@ def _add_checkpointing_args(parser):
 
     group.add_argument('--save', type=str, default=None,
                        help='Output directory to save checkpoints to.')
+    group.add_argument('--save-local-path', type=str, default=None,
+                       help='Local path to save checkpoints to.')
+    group.add_argument('--save-remote-path', type=str, default=None,
+                       help='Remote path to save checkpoints to.')
     group.add_argument('--save-interval', type=int, default=None,
                        help='Number of iterations between checkpoint saves.')
     group.add_argument('--no-save-optim', action='store_true', default=None,
@@ -1032,6 +1036,10 @@ def _add_checkpointing_args(parser):
                        help='Do not save current rng state.')
     group.add_argument('--load', type=str, default=None,
                        help='Directory containing a model checkpoint.')
+    group.add_argument('--load—local-path', type=str, default=None,
+                       help='Local path to load model checkpoint from.')
+    group.add_argument('--load—remote-path', type=str, default=None,
+                       help='Remote path to load model checkpoint from.')
     group.add_argument('--no-load-optim', action='store_true', default=None,
                        help='Do not load optimizer when loading checkpoint.')
     group.add_argument('--no-load-rng', action='store_true', default=None,

@@ -22,6 +22,8 @@ def get_param_groups(modules,
     wd_scale_lr = []
     no_wd_no_scale_lr = []
     no_wd_scale_lr = []
+    print(f"no_weight_decay_cond: {no_weight_decay_cond}")
+    print(f"scale_lr_cond: {scale_lr_cond}")
     for module in modules:
         for name, param in module.named_parameters():
             if not param.requires_grad:
@@ -32,6 +34,8 @@ def get_param_groups(modules,
             else:
                 # do not regularize biases nor Norm parameters
                 no_wd = name.endswith(".bias") or len(param.shape) == 1
+
+            no_wd = False
 
             if scale_lr_cond is not None:
                 scale_lr = scale_lr_cond(name, param)
