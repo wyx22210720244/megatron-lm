@@ -18,6 +18,8 @@ CHECKPOINT_PATH=/root/Megatron-LM/checkpoints/gpt2 #自定义ckp路径
 VOCAB_FILE=/root/Megatron-LM/data/gpt2-vocab.json
 MERGE_FILE=/root/Megatron-LM/data/gpt2-merges.txt
 DATA_PATH=/root/Megatron-LM/data/meg-gpt2-oscar-en-10k_text_document
+REMOTE_PATH=/root/megatron-lm/checkpoints/gpt2
+LOCAL_PATH=/root/Megatron-LM/checkpoints/gpt2
 
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
@@ -68,6 +70,10 @@ torchrun $DISTRIBUTED_ARGS /root/dp/megatron-lm/pretrain_gpt.py \
     $DATA_ARGS \
     $OUTPUT_ARGS \
     --distributed-backend nccl \
-    --load $CHECKPOINT_PATH \
-    --save $CHECKPOINT_PATH
+    --load  \
+    --save \
+    --save-remote-path $REMOTE_PATH \
+    --save-local-path $LOCAL_PATH \
+    --load-remote-path $REMOTE_PATH \
+    --load-local-path $LOCAL_PATH
 

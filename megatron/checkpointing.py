@@ -98,15 +98,20 @@ def save_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, 
         return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")
 
 
-def load_layer_wise_checkpoint_name(checkpoints_path, iteration, layer_id=None, type=None, tensor_rank=None):
+def load_layer_wise_checkpoint_name(load_dir, iteration, layer_id=None, type=None, tensor_rank=None):
     directory = 'iter_{:07d}'.format(iteration)
-    comm_path = os.path.join(checkpoints_path, directory,
+    remote_path = os.path.join(load_dir['remote'], directory,
                              f"{type}")
+    local_path = os.path.join(load_dir['local'], directory,f"{type}")
     if isinstance(layer_id, str):
-        return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
+        if os.path.isfile(os.path.join(local_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")):
+            return os.path.join(local_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
+        return os.path.join(remote_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id}.pt")
     else:
         layer_id = layer_id + mpu.get_current_rank_start_layer()
-        return os.path.join(comm_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")
+        if os.path.isfile(os.path.join(local_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")):
+            return os.path.join(local_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")
+        return os.path.join(remote_path, f"mp_rank_{tensor_rank:02d}_layer_{layer_id:02d}.pt")
 
 
 def get_checkpoint_name(checkpoints_path, iteration, release=False,
@@ -199,10 +204,16 @@ def find_checkpoint_rank_0(checkpoints_path, iteration, release=False):
 def get_checkpoint_tracker_filename(checkpoints_path):
     """Tracker file rescords the latest chckpoint during
     training to restart from."""
-    return os.path.join(checkpoints_path, 'latest_checkpointed_iteration.txt')
+    # local_path = os.path.join(load_dir['local'], 'latest_checkpointed_iteration.txt')
+    remote_path = os.path.join(checkpoints_path, 'latest_checkpointed_iteration.txt')
+    # if os.path.isfile(local_path):
+    #     return local_path
+    return remote_path
 
 
 def get_tensor_size_filename(checkpoints_path, iteration, type):
+    """Determine the directory name for this rank's checkpoint."""
+    print(f"tensor_size_file:{checkpoints_path}")
     return os.path.join(checkpoints_path, 'iter_{:07d}'.format(iteration), f"{type}", 'tensor_size.txt')
 
 
@@ -279,7 +290,7 @@ def get_rng_state():
     return rng_state_list
 
 
-def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
+def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint_path, local=False, remote=False):
     """Save a model checkpoint."""
     args = get_args()
 
@@ -287,13 +298,13 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
     model = unwrap_model(model)
 
     print_rank_0('saving checkpoint at iteration {:7d} to {}'.format(
-        iteration, args.save))
+        iteration, checkpoint_path))
 
     # Collect rng state across data parallel ranks.
     rng_state = get_rng_state()
 
     # Checkpoint name.
-    checkpoint_name = get_checkpoint_name(args.save, iteration)
+    checkpoint_name = get_checkpoint_name(checkpoint_path, iteration)
 
     # Save distributed optimizer's custom parameter state.
     if args.use_distributed_optimizer and not args.no_save_optim and optimizer is not None:
@@ -328,15 +339,17 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
                         layer_param[layer_number][name] = tensor
         if 'word_embeddings_for_head' in model_state_dict:
             final_word_embedding_param['word_embeddings_for_head'] = model_state_dict['word_embeddings_for_head']
-        embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'embedding', 'param')
+        embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, 'embedding',
+                                                                          'param')
         ensure_directory_exists(embedding_param_checkpoint_name)
         torch.save(embedding_param, embedding_param_checkpoint_name)
         for layer_id, param in layer_param.items():
-            layer_param_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, int(layer_id), 'param')
+            layer_param_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, int(layer_id),
+                                                                          'param')
             ensure_directory_exists(layer_param_checkpoint_name)
             torch.save(param, layer_param_checkpoint_name)
         if final_word_embedding_param:
-            final_word_embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration,
+            final_word_embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
                                                                                          'final_word_embedding',
                                                                                          'param')
             ensure_directory_exists(final_word_embedding_param_checkpoint_name)
@@ -404,37 +417,40 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
                     layer_num += 1
         if embedding_optimizer:
             print(f"embedding_optimizer:{embedding_optimizer}=====================================")
-            embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'embedding',
+            embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
+                                                                                  'embedding',
                                                                                   'optimizer')
             ensure_directory_exists(embedding_optimizer_checkpoint_name)
             torch.save(embedding_optimizer, embedding_optimizer_checkpoint_name)
         print(
             f"当前rank是{torch.distributed.get_rank()},layer_optimizer:{layer_optimizer}=====================================")
         for layer_id, param in layer_optimizer.items():
-            layer_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, int(layer_id),
+            layer_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, int(layer_id),
                                                                               'optimizer')
             ensure_directory_exists(layer_optimizer_checkpoint_name)
             torch.save(param, layer_optimizer_checkpoint_name)
         if final_word_embedding_optimizer:
             print(
                 f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
-            final_word_embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration,
+            final_word_embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
                                                                                              'final_word_embedding',
                                                                                              'optimizer')
             ensure_directory_exists(final_word_embedding_optimizer_checkpoint_name)
             torch.save(final_word_embedding_optimizer, final_word_embedding_optimizer_checkpoint_name)
         if param_group and torch.distributed.get_rank() == 0:
-            param_group_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'meta', 'param_group')
+            param_group_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, 'meta',
+                                                                          'param_group')
             ensure_directory_exists(param_group_checkpoint_name)
             torch.save(param_group, param_group_checkpoint_name)
-        if grad_scaler and torch.distributed.get_rank()==0:
-            grad_scaler_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'meta', 'grad_scaler')
+        if grad_scaler and torch.distributed.get_rank() == 0:
+            grad_scaler_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, 'meta',
+                                                                          'grad_scaler')
             ensure_directory_exists(grad_scaler_checkpoint_name)
             torch.save(grad_scaler, grad_scaler_checkpoint_name)
 
     # Collect args, model, RNG.
     if not torch.distributed.is_initialized() \
-            or mpu.is_rank_in_dp_first_group():
+            or mpu.is_rank_in_dp_first_group() and remote:
 
         # Arguments, iteration, and model.
         state_dict = {'args': args, 'checkpoint_version': 3.0, 'iteration': iteration}
@@ -456,7 +472,42 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
                 state_dict['opt_param_scheduler'] = \
                     opt_param_scheduler.state_dict()
                 opt_param_scheduler_optimizer['opt_param_scheduler'] = state_dict['opt_param_scheduler']
-                opt_param_scheduler_checkpoint_name = save_layer_wise_checkpoint_name(args.save, iteration, 'meta',
+                opt_param_scheduler_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
+                                                                                      'meta',
+                                                                                      'opt_param_scheduler')
+                ensure_directory_exists(opt_param_scheduler_checkpoint_name)
+                torch.save(opt_param_scheduler_optimizer, opt_param_scheduler_checkpoint_name)
+        # RNG states.
+        if not args.no_save_rng:
+            state_dict["rng_state"] = rng_state
+        print(f"state_dict:{state_dict}")
+        # Save.
+        ensure_directory_exists(checkpoint_name)
+
+        torch.save(state_dict, checkpoint_name)
+
+    if local:
+        state_dict = {'args': args, 'checkpoint_version': 3.0, 'iteration': iteration}
+        if len(model) == 1:
+            # 模型的保存
+            state_dict['model'] = model[0].state_dict_for_save_checkpoint()
+        else:
+            for i in range(len(model)):
+                mpu.set_virtual_pipeline_model_parallel_rank(i)
+                state_dict['model%d' % i] = \
+                    model[i].state_dict_for_save_checkpoint()
+        _save_layer_parameters(state_dict['model'])
+        # Optimizer stuff.
+        if not args.no_save_optim:
+            if optimizer is not None:
+                state_dict['optimizer'] = optimizer.state_dict()
+                _save_layer_optimizer(state_dict['optimizer'])
+            if opt_param_scheduler is not None:
+                state_dict['opt_param_scheduler'] = \
+                    opt_param_scheduler.state_dict()
+                opt_param_scheduler_optimizer['opt_param_scheduler'] = state_dict['opt_param_scheduler']
+                opt_param_scheduler_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
+                                                                                      'meta',
                                                                                       'opt_param_scheduler')
                 ensure_directory_exists(opt_param_scheduler_checkpoint_name)
                 torch.save(opt_param_scheduler_optimizer, opt_param_scheduler_checkpoint_name)
@@ -474,12 +525,12 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler):
         torch.distributed.barrier()
 
     print_rank_0('  successfully saved checkpoint at iteration {:7d} to {}' \
-                 .format(iteration, args.save))
+                 .format(iteration, checkpoint_path))
 
     # And update the latest iteration
     if not torch.distributed.is_initialized() \
             or torch.distributed.get_rank() == 0:
-        tracker_filename = get_checkpoint_tracker_filename(args.save)
+        tracker_filename = get_checkpoint_tracker_filename(checkpoint_path)
         with open(tracker_filename, 'w') as f:
             f.write(str(iteration))
 
@@ -756,9 +807,11 @@ def _split_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration
                     dim = 0 if idx in [2, 3, 8, 9] else 1
                     fp32_tensors = torch.split(param, param.size(dim) // num_parts, dim=dim)
                     layer_optimizer[layer_id]['fp32_from_fp16_params'][idx] = fp32_tensors[tensor_rank]
-                    tensors = torch.split(layer_optimizer[layer_id][idx][0]['exp_avg'], param.size(dim) // num_parts, dim=dim)
+                    tensors = torch.split(layer_optimizer[layer_id][idx][0]['exp_avg'], param.size(dim) // num_parts,
+                                          dim=dim)
                     layer_optimizer[layer_id][idx][0]['exp_avg'] = tensors[tensor_rank]
-                    tensors = torch.split(layer_optimizer[layer_id][idx][0]['exp_avg_sq'], param.size(dim) // num_parts, dim=dim)
+                    tensors = torch.split(layer_optimizer[layer_id][idx][0]['exp_avg_sq'], param.size(dim) // num_parts,
+                                          dim=dim)
                     layer_optimizer[layer_id][idx][0]['exp_avg_sq'] = tensors[tensor_rank]
 
     rank = torch.distributed.get_rank()
@@ -769,10 +822,17 @@ def _split_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration
     _split(embedding_param['embedding']['word_embeddings'], 'weight', 0, tensor_rank, num_parts)
     embedding_optimizer_path = load_layer_wise_checkpoint_name(load_dir, iteration, 'embedding', 'optimizer', obj_rank)
     embedding_optimizer = torch.load(embedding_optimizer_path, map_location='cpu')
-    embedding_fp32_tensors = torch.split(embedding_optimizer['fp32_from_fp16_params'][0], embedding_optimizer['fp32_from_fp16_params'][0].size(0) // num_parts, dim=0)
+    embedding_fp32_tensors = torch.split(embedding_optimizer['fp32_from_fp16_params'][0],
+                                         embedding_optimizer['fp32_from_fp16_params'][0].size(0) // num_parts, dim=0)
     embedding_optimizer['fp32_from_fp16_params'][0] = embedding_fp32_tensors[tensor_rank]
-    embedding_optimizer[0][0]['exp_avg'] = torch.split(embedding_optimizer[0][0]['exp_avg'], embedding_optimizer[0][0]['exp_avg'].size(0) // num_parts, dim=0)[tensor_rank]
-    embedding_optimizer[0][0]['exp_avg_sq'] = torch.split(embedding_optimizer[0][0]['exp_avg_sq'], embedding_optimizer[0][0]['exp_avg_sq'].size(0) // num_parts, dim=0)[tensor_rank]
+    embedding_optimizer[0][0]['exp_avg'] = \
+        torch.split(embedding_optimizer[0][0]['exp_avg'], embedding_optimizer[0][0]['exp_avg'].size(0) // num_parts,
+                    dim=0)[
+            tensor_rank]
+    embedding_optimizer[0][0]['exp_avg_sq'] = \
+        torch.split(embedding_optimizer[0][0]['exp_avg_sq'],
+                    embedding_optimizer[0][0]['exp_avg_sq'].size(0) // num_parts,
+                    dim=0)[tensor_rank]
     # layer param
     for layer_id in range(mpu.get_current_rank_end_layer() + 1 - mpu.get_current_rank_start_layer()):
         layer_param_path = load_layer_wise_checkpoint_name(load_dir, iteration, layer_id, 'param', obj_rank)
@@ -959,10 +1019,14 @@ def replace_layer_number(key, old_num, new_num):
     return re.sub(pattern, rf'\g<1>{new_num}\g<3>', key)
 
 
-def _load_layer_wise_base_checkpoint(load_dir, rank0=False):
+def _load_layer_wise_base_checkpoint(local_load_dir=None, remote_load_dir=None, rank0=False):
     """ Load the base state_dict from the given directory
     """
-    tracker_filename = get_checkpoint_tracker_filename(load_dir)
+    load_dir = {
+        'local': local_load_dir,
+        'remote': remote_load_dir
+    }
+    tracker_filename = get_checkpoint_tracker_filename(load_dir['remote'])
     # iteration = read_metadata(tracker_filename)[0]
     if not os.path.isfile(tracker_filename):
         if not rank0:
@@ -981,7 +1045,7 @@ def _load_layer_wise_base_checkpoint(load_dir, rank0=False):
 
     # state_dict['model']['word_embeddings_for_head'] = {}
     tensor_size = mpu.get_tensor_model_parallel_world_size()
-    tensor_size_file_name = get_tensor_size_filename(load_dir, iteration, 'param')
+    tensor_size_file_name = get_tensor_size_filename(load_dir['remote'], iteration, 'param')
     tensor_size_pre = read_tensor_size(tensor_size_file_name)
     if tensor_size_pre < tensor_size:
         state_dict = _split_tensors(load_dir, state_dict, tensor_size, tensor_size_pre, iteration)
@@ -1141,12 +1205,13 @@ def load_checkpoint(model, optimizer, opt_param_scheduler, load_arg='load', stri
         parameters and buffers in model.
     """
     args = get_args()
-    load_dir = getattr(args, load_arg)
-
+    # load_dir = getattr(args, load_arg)
+    local_load_dir = getattr(args, 'load_local_path')
+    remote_load_dir = getattr(args, 'load_remote_path')
     model = unwrap_model(model)
     # 主要作用是拿到state—dict
     # state_dict_origin, checkpoint_name, release = _load_base_checkpoint(load_dir, rank0=False)
-    state_dict, release = _load_layer_wise_base_checkpoint(load_dir, rank0=False)
+    state_dict, release = _load_layer_wise_base_checkpoint(local_load_dir, remote_load_dir, rank0=False)
     # print(f"当前rank是{torch.distributed.get_rank()},state_dict_origin为{state_dict_origin},state-dict为{state_dict}")
     # Checkpoint not loaded.
     if state_dict is None:

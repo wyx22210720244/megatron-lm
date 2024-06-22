@@ -1022,7 +1022,7 @@ def _add_learning_rate_args(parser):
 def _add_checkpointing_args(parser):
     group = parser.add_argument_group(title='checkpointing')
 
-    group.add_argument('--save', type=str, default=None,
+    group.add_argument('--save', action='store_true', default=None,
                        help='Output directory to save checkpoints to.')
     group.add_argument('--save-local-path', type=str, default=None,
                        help='Local path to save checkpoints to.')
@@ -1034,11 +1034,11 @@ def _add_checkpointing_args(parser):
                        help='Do not save current optimizer.')
     group.add_argument('--no-save-rng', action='store_true', default=None,
                        help='Do not save current rng state.')
-    group.add_argument('--load', type=str, default=None,
+    group.add_argument('--load', action='store_true', default=None,
                        help='Directory containing a model checkpoint.')
-    group.add_argument('--load—local-path', type=str, default=None,
+    group.add_argument('--load-local-path', type=str, default=None,
                        help='Local path to load model checkpoint from.')
-    group.add_argument('--load—remote-path', type=str, default=None,
+    group.add_argument('--load-remote-path', type=str, default=None,
                        help='Remote path to load model checkpoint from.')
     group.add_argument('--no-load-optim', action='store_true', default=None,
                        help='Do not load optimizer when loading checkpoint.')

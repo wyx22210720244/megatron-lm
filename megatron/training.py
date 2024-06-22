@@ -49,6 +49,7 @@ from megatron.utils import calc_params_l2_norm
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
+import threading
 
 
 def print_datetime(string):
@@ -720,7 +721,17 @@ def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler):
     # Extra barrier is added to make sure
     # all ranks report the max time.
     timers('save-checkpoint', log_level=0).start(barrier=True)
-    save_checkpoint(iteration, model, optimizer, opt_param_scheduler)
+    args = get_args()
+    if args.save_local_path and args.save_remote_path:
+        thread_save_to_local_path = threading.Thread(target=save_checkpoint, args=(iteration, model, optimizer, opt_param_scheduler,args.save_local_path,True,False))
+        thread_save_to_remote_path = threading.Thread(target=save_checkpoint, args=(iteration, model, optimizer, opt_param_scheduler,args.save_remote_path,False,True))
+        # 两个线程开始
+        thread_save_to_local_path.start()
+        thread_save_to_remote_path.start()
+        # 等待结束
+        thread_save_to_local_path.join()
+        thread_save_to_remote_path.join()
+
     timers('save-checkpoint').stop(barrier=True)
     timers.log(['save-checkpoint'])
 
