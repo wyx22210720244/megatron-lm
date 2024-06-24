@@ -772,7 +772,8 @@ def _add_regularization_args(parser):
 
 def _add_training_args(parser):
     group = parser.add_argument_group(title='training')
-
+    group.add_argument('--num-rdma-nic', type=int, default=None,
+                       help='Number of RDMA NICs to use.')
     group.add_argument('--micro-batch-size', type=int, default=None,
                        help='Batch size per model instance (local batch size). '
                        'Global batch size is local batch size times data '

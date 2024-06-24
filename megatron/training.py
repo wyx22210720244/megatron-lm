@@ -7,6 +7,9 @@ from datetime import datetime
 import math
 import logging
 import sys
+
+import redislite
+
 from .log_handler import CustomHandler
 # Make default logging level INFO, but filter out all log messages not from MCore.
 logging.basicConfig(handlers=[CustomHandler()], level=logging.INFO)
@@ -50,6 +53,8 @@ from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
 import threading
+from veturbo.utils import distribute_file_rdma,RDMADistConfig
+import socket
 
 
 def print_datetime(string):
@@ -417,6 +422,26 @@ def setup_model_and_optimizer(model_provider_func,
     if args.load is not None:
         timers = get_timers()
         timers('load-checkpoint', log_level=0).start(barrier=True)
+        # hostname = socket.gethostname()
+        # print(f"Hostname: {hostname}")
+        # # 解析主机名为IP地址
+        # ip_address = socket.gethostbyname(hostname)
+        # print(f"IP Address: {ip_address}")
+        # os.environ["MASTER_ADDR"] = ip_address
+        # start_time = time.time()
+        # print_rank_0(f'test distributed rdma file {start_time}')
+        # # if torch.distributed.get_rank() == 0:
+        # #     store = redislite.Redis(serverconfig={"bind": ip_address, "port": 31000})
+        # # file = open(os.path.join(args.load_local_path,'rdma_test_file.txt')).read()
+        # distribute_file_rdma(
+        #     RDMADistConfig(
+        #         source_dir = args.load_local_path,
+        #         destination_dir = args.load_local_path,
+        #         files = ['rdma_test_file.txt'],
+        #         NUM_RDMA_NIC = 2
+        #     )
+        # )
+        # print_rank_0(f'test distributed rdma file {time.time() - start_time}')
         args.iteration = load_checkpoint(model, optimizer, opt_param_scheduler)
         timers('load-checkpoint').stop(barrier=True)
         timers.log(['load-checkpoint'])

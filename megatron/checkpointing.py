@@ -339,10 +339,11 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint
                         layer_param[layer_number][name] = tensor
         if 'word_embeddings_for_head' in model_state_dict:
             final_word_embedding_param['word_embeddings_for_head'] = model_state_dict['word_embeddings_for_head']
-        embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, 'embedding',
+        if embedding_param:
+            embedding_param_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, 'embedding',
                                                                           'param')
-        ensure_directory_exists(embedding_param_checkpoint_name)
-        torch.save(embedding_param, embedding_param_checkpoint_name)
+            ensure_directory_exists(embedding_param_checkpoint_name)
+            torch.save(embedding_param, embedding_param_checkpoint_name)
         for layer_id, param in layer_param.items():
             layer_param_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, int(layer_id),
                                                                           'param')
@@ -374,8 +375,8 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint
                     return idx
             assert "param_idx not in param_group"
 
-        print(
-            f"当前rank是{torch.distributed.get_rank()},fp32的长度是{len(optimizer_state_dict['fp32_from_fp16_params'])}")
+        # print(
+        #     f"当前rank是{torch.distributed.get_rank()},fp32的长度是{len(optimizer_state_dict['fp32_from_fp16_params'])}")
         for param_idx, param in optimizer_state_dict['optimizer']['state'].items():
             # param_group_idx = _get_param_group_idx(param_group['param_groups'], param_idx)
             # 参数组名称
@@ -386,13 +387,13 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint
                     optimizer_state_dict['fp32_from_fp16_params'][param_group_idx][param_idx])
                 sign = 2
             elif last_pp_stage and param_idx == total_params - 1:
-                print(f"当前rank是{torch.distributed.get_rank()},param_idx为{param_idx}")
+                # print(f"当前rank是{torch.distributed.get_rank()},param_idx为{param_idx}")
                 final_word_embedding_optimizer[0] = [param, param_group_idx]
                 final_word_embedding_optimizer['fp32_from_fp16_params'] = []
                 final_word_embedding_optimizer['fp32_from_fp16_params'].append(
                     optimizer_state_dict['fp32_from_fp16_params'][param_group_idx][param_idx])
-                print(
-                    f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
+                # print(
+                #     f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
             else:
                 if layer_num not in layer_optimizer:
                     layer_optimizer[layer_num] = {'fp32_from_fp16_params': []}
@@ -409,29 +410,29 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint
                     layer_optimizer[layer_num][13] = [param, param_group_idx]
                 else:
                     layer_optimizer[layer_num][(param_idx - sign) % 12] = [param, param_group_idx]
-                print(
-                    f"当前rank是{torch.distributed.get_rank()},param_idx为{param_idx},layer_num为{layer_num},param_group_idx为{param_group_idx}")
+                # print(
+                #     f"当前rank是{torch.distributed.get_rank()},param_idx为{param_idx},layer_num为{layer_num},param_group_idx为{param_group_idx}")
                 layer_optimizer[layer_num]['fp32_from_fp16_params'].append(
                     optimizer_state_dict['fp32_from_fp16_params'][param_group_idx][param_idx])
                 if (param_idx - sign + 1) % 12 == 0 and total_params - 12 > param_idx > sign:
                     layer_num += 1
         if embedding_optimizer:
-            print(f"embedding_optimizer:{embedding_optimizer}=====================================")
+            # print(f"embedding_optimizer:{embedding_optimizer}=====================================")
             embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
                                                                                   'embedding',
                                                                                   'optimizer')
             ensure_directory_exists(embedding_optimizer_checkpoint_name)
             torch.save(embedding_optimizer, embedding_optimizer_checkpoint_name)
-        print(
-            f"当前rank是{torch.distributed.get_rank()},layer_optimizer:{layer_optimizer}=====================================")
+        # print(
+            # f"当前rank是{torch.distributed.get_rank()},layer_optimizer:{layer_optimizer}=====================================")
         for layer_id, param in layer_optimizer.items():
             layer_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration, int(layer_id),
                                                                               'optimizer')
             ensure_directory_exists(layer_optimizer_checkpoint_name)
             torch.save(param, layer_optimizer_checkpoint_name)
         if final_word_embedding_optimizer:
-            print(
-                f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
+            # print(
+            #     f"final_word_embedding_optimizer:{final_word_embedding_optimizer}=====================================")
             final_word_embedding_optimizer_checkpoint_name = save_layer_wise_checkpoint_name(checkpoint_path, iteration,
                                                                                              'final_word_embedding',
                                                                                              'optimizer')
@@ -480,11 +481,11 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint
         # RNG states.
         if not args.no_save_rng:
             state_dict["rng_state"] = rng_state
-        print(f"state_dict:{state_dict}")
+        # print(f"state_dict:{state_dict}")
         # Save.
-        ensure_directory_exists(checkpoint_name)
-
-        torch.save(state_dict, checkpoint_name)
+        # ensure_directory_exists(checkpoint_name)
+        #
+        # torch.save(state_dict, checkpoint_name)
 
     if local:
         state_dict = {'args': args, 'checkpoint_version': 3.0, 'iteration': iteration}
@@ -514,11 +515,11 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, checkpoint
         # RNG states.
         if not args.no_save_rng:
             state_dict["rng_state"] = rng_state
-        print(f"state_dict:{state_dict}")
+        # print(f"state_dict:{state_dict}")
         # Save.
-        ensure_directory_exists(checkpoint_name)
-
-        torch.save(state_dict, checkpoint_name)
+        # ensure_directory_exists(checkpoint_name)
+        #
+        # torch.save(state_dict, checkpoint_name)
 
     # Wait so everyone is done (necessary)
     if torch.distributed.is_initialized():

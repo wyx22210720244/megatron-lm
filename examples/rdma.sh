@@ -1,10 +1,8 @@
 #!/bin/bash
 
-# Runs the "345M" parameter model
-
+# Runs the "7B" parameter model
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 #export NCCL_DEBUG=INFO
-#export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export NCCL_IB_GID_INDEX=3
 GPUS_PER_NODE=4
 # Change for multinode config
@@ -14,12 +12,10 @@ GPUS_PER_NODE=4
 #NODE_RANK=0
 #WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-#CHECKPOINT_PATH=/root/Megatron-LM/checkpoints/gpt2 #自定义ckp路径
+CHECKPOINT_PATH=/root/Megatron-LM/examples/7b_ckp/gpt2 #自定义ckp路径
 VOCAB_FILE=/root/Megatron-LM/data/gpt2-vocab.json
 MERGE_FILE=/root/Megatron-LM/data/gpt2-merges.txt
 DATA_PATH=/root/Megatron-LM/data/meg-gpt2-oscar-en-10k_text_document
-REMOTE_PATH=/root/megatron-lm/checkpoints/gpt2
-LOCAL_PATH=/root/Megatron-LM/checkpoints/gpt2
 
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
@@ -30,25 +26,24 @@ DISTRIBUTED_ARGS="
 "
 
 GPT_ARGS="
-    --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 2 \
-    --num-layers 12 \
-    --hidden-size 2048 \
+    --tensor-model-parallel-size 8 \
+    --pipeline-model-parallel-size 1 \
+    --num-layers 32 \
+    --hidden-size 4096 \
     --num-attention-heads 32 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
-    --micro-batch-size 16 \
-    --global-batch-size 128 \
+    --micro-batch-size 8 \
+    --global-batch-size 96 \
     --lr 0.00015 \
-    --train-iters 200 \
+    --train-iters 100 \
     --lr-decay-iters 320000 \
     --lr-decay-style cosine \
     --min-lr 1.0e-5 \
     --weight-decay 1e-2 \
     --lr-warmup-fraction .01 \
     --clip-grad 1.0 \
-    --fp16 \
-    --no-load-rng
+    --fp16
 "
 
 DATA_ARGS="
@@ -60,20 +55,10 @@ DATA_ARGS="
 
 OUTPUT_ARGS="
     --log-interval 20 \
-    --save-interval 50 \
+    --save-interval 10000 \
     --eval-interval 1000 \
     --eval-iters 10
 "
-
-torchrun $DISTRIBUTED_ARGS /root/dp/megatron-lm/pretrain_gpt.py \
-    $GPT_ARGS \
-    $DATA_ARGS \
-    $OUTPUT_ARGS \
-    --distributed-backend nccl \
-    --load \
-    --save \
-    --save-remote-path $REMOTE_PATH \
-    --save-local-path $LOCAL_PATH \
-    --load-remote-path $REMOTE_PATH \
-    --load-local-path $LOCAL_PATH
-
+#export CUDA_VISIBLE_DEVICES=0
+torchrun $DISTRIBUTED_ARGS /root/dp/megatron-lm/examples/test_socket.py \
+    --distributed-backend nccl
