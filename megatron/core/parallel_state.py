@@ -495,7 +495,7 @@ def initialize_model_parallel(
     for key, value in group_allocation.items():
         pp_list = value
         pp_list = change_to_symmetric_list(pp_list)
-        # print(f"当前的rank是{rank},当前的pp_list是{pp_list}\n")
+        print(f"当前的rank是{rank},当前的pp_list是{pp_list}\n")
         for idx, pipeline_ranks in enumerate(zip(*pp_list)):
             group = torch.distributed.new_group(
                 pipeline_ranks, pg_options=get_nccl_options('pp', nccl_comm_cfgs)
