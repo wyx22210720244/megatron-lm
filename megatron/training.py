@@ -8,7 +8,7 @@ import math
 import logging
 import sys
 
-import redislite
+#import redislite
 
 from .log_handler import CustomHandler
 # Make default logging level INFO, but filter out all log messages not from MCore.
@@ -53,8 +53,8 @@ from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
 import threading
-from veturbo.utils import distribute_file_rdma,RDMADistConfig
-import socket
+#from veturbo.utils import distribute_file_rdma,RDMADistConfig
+#import socket
 
 
 def print_datetime(string):
@@ -827,7 +827,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
         record_shapes=True,
         with_stack=True
     )
-    profiler.start()
+    #profiler.start()
     while iteration < args.train_iters:
         # if args.profile and \
         #    iteration == args.profile_step_start and \
@@ -856,7 +856,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        opt_param_scheduler,
                        config)
         iteration += 1
-        profiler.step()
+        #profiler.step()
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
                                        get_num_microbatches()

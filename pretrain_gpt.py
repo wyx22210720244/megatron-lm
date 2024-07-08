@@ -149,7 +149,7 @@ def forward_step(data_iterator, model: GPTModel):
 
 
 def is_dataset_built_on_rank():
-    return (mpu.is_pipeline_first_stage() or mpu.is_pipeline_last_stage()) and mpu.get_tensor_model_parallel_rank() == 0
+    return mpu.get_tensor_model_parallel_rank() == 0
 
 
 def core_gpt_dataset_config_from_args(args):

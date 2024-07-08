@@ -6,7 +6,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 #export NCCL_DEBUG=INFO
 #export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export NCCL_IB_GID_INDEX=3
-GPUS_PER_NODE=3
+GPUS_PER_NODE=4
 # Change for multinode config
 #MASTER_ADDR=localhost
 #MASTER_PORT=6000
@@ -14,12 +14,10 @@ GPUS_PER_NODE=3
 #NODE_RANK=0
 #WORLD_SIZE=$(($GPUS_PER_NODE*$NNODES))
 
-#CHECKPOINT_PATH=/root/Megatron-LM/checkpoints/gpt2 #自定义ckp路径
+CHECKPOINT_PATH=/root/Megatron-LM/checkpoints/gpt2 #自定义ckp路径
 VOCAB_FILE=/root/Megatron-LM/data/gpt2-vocab.json
 MERGE_FILE=/root/Megatron-LM/data/gpt2-merges.txt
 DATA_PATH=/root/Megatron-LM/data/meg-gpt2-oscar-en-10k_text_document
-REMOTE_PATH=/root/megatron-lm/checkpoints/gpt2
-LOCAL_PATH=/root/Megatron-LM/checkpoints/gpt2
 
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
@@ -31,24 +29,23 @@ DISTRIBUTED_ARGS="
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 5 \
-    --num-layers 10 \
-    --hidden-size 1024 \
-    --num-attention-heads 32 \
+    --pipeline-model-parallel-size 12 \
+    --num-layers 24 \
+    --hidden-size 2048 \
+    --num-attention-heads 16 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
     --micro-batch-size 16 \
     --global-batch-size 512 \
     --lr 0.00015 \
-    --train-iters 2000 \
+    --train-iters 1000 \
     --lr-decay-iters 320000 \
     --lr-decay-style cosine \
     --min-lr 1.0e-5 \
     --weight-decay 1e-2 \
     --lr-warmup-fraction .01 \
     --clip-grad 1.0 \
-    --fp16 \
-    --no-load-rng
+    --fp16
 "
 
 DATA_ARGS="
@@ -59,19 +56,14 @@ DATA_ARGS="
 "
 
 OUTPUT_ARGS="
-    --log-interval 20 \
-    --save-interval 200 \
+    --log-interval 10 \
+    --save-interval 10000 \
     --eval-interval 1000 \
     --eval-iters 10
 "
-export CUDA_VISIBLE_DEVICES=0,1,2
+export CUDA_VISIBLE_DIVICES=0,1,2,3
 torchrun $DISTRIBUTED_ARGS /root/dp/megatron-lm/pretrain_gpt.py \
     $GPT_ARGS \
     $DATA_ARGS \
     $OUTPUT_ARGS \
-    --distributed-backend nccl \
-    --save-remote-path $REMOTE_PATH \
-    --save-local-path $LOCAL_PATH \
-    --load-remote-path $REMOTE_PATH \
-    --load-local-path $LOCAL_PATH
-
+    --distributed-backend nccl
