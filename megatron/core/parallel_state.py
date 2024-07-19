@@ -326,14 +326,14 @@ def initialize_model_parallel(
             group = torch.distributed.new_group(
                 ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
             )
-            group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+            #group_gloo = torch.distributed.new_group(ranks, backend="gloo")
             if rank in ranks:
                 _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
-                _DATA_PARALLEL_GROUP_GLOO = group_gloo
+                #_DATA_PARALLEL_GROUP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
                 _DATA_PARALLEL_GLOBAL_LAYERS[_DATA_PARALLEL_IDX] = int(dp_layer_comm[dp_group])
                 _DATA_PARALLEL_GROUP_WITH_CP = group
-                _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+                #_DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
                 _DATA_PARALLEL_IDX += 1
 
@@ -805,10 +805,10 @@ def initialize_model_parallel_origin(
             group = torch.distributed.new_group(
                 ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
             )
-            group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+            #group_gloo = torch.distributed.new_group(ranks, backend="gloo")
             if rank in ranks:
                 _DATA_PARALLEL_GROUP = group
-                _DATA_PARALLEL_GROUP_GLOO = group_gloo
+                #_DATA_PARALLEL_GROUP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS = ranks
         for j in range(tensor_model_parallel_size):
             ranks_with_cp = range(start_rank + j, end_rank, tensor_model_parallel_size)
@@ -816,10 +816,10 @@ def initialize_model_parallel_origin(
             group_with_cp = torch.distributed.new_group(
                 ranks_with_cp, pg_options=get_nccl_options('dp_cp', nccl_comm_cfgs)
             )
-            group_with_cp_gloo = torch.distributed.new_group(ranks_with_cp, backend="gloo")
+            #group_with_cp_gloo = torch.distributed.new_group(ranks_with_cp, backend="gloo")
             if rank in ranks_with_cp:
                 _DATA_PARALLEL_GROUP_WITH_CP = group_with_cp
-                _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_with_cp_gloo
+                #_DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_with_cp_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks_with_cp
 
     # Apply SHARP to DP process groups
@@ -1077,16 +1077,16 @@ def get_data_parallel_group(with_context_parallel=False):
         return _DATA_PARALLEL_GROUP
 
 
-def get_data_parallel_group_gloo(with_context_parallel=False):
-    """Get the data parallel group-gloo the caller rank belongs to."""
-    if with_context_parallel:
-        assert (
-                _DATA_PARALLEL_GROUP_WITH_CP_GLOO is not None
-        ), 'data parallel group-gloo with context parallel combined is not initialized'
-        return _DATA_PARALLEL_GROUP_WITH_CP_GLOO
-    else:
-        assert _DATA_PARALLEL_GROUP_GLOO is not None, 'data parallel group-gloo is not initialized'
-        return _DATA_PARALLEL_GROUP_GLOO
+# def get_data_parallel_group_gloo(with_context_parallel=False):
+#     """Get the data parallel group-gloo the caller rank belongs to."""
+#     if with_context_parallel:
+#         assert (
+#                 _DATA_PARALLEL_GROUP_WITH_CP_GLOO is not None
+#         ), 'data parallel group-gloo with context parallel combined is not initialized'
+#         return _DATA_PARALLEL_GROUP_WITH_CP_GLOO
+#     else:
+#         assert _DATA_PARALLEL_GROUP_GLOO is not None, 'data parallel group-gloo is not initialized'
+#         return _DATA_PARALLEL_GROUP_GLOO
 
 
 def get_context_parallel_group(check_initialized=True):
