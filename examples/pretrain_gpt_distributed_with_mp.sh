@@ -3,9 +3,9 @@
 # Runs the "345M" parameter model
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export NCCL_DEBUG=INFO
+#export NCCL_DEBUG=INFO
 #export TORCH_DISTRIBUTED_DEBUG=DETAIL
-#export NCCL_IB_GID_INDEX=3
+export NCCL_IB_GID_INDEX=3
 GPUS_PER_NODE=8
 # Change for multinode config
 #MASTER_ADDR=localhost
@@ -21,22 +21,22 @@ DATA_PATH=/root/Megatron-LM/data/meg-gpt2-oscar-en-10k_text_document
 
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
-    --nnodes 2 \
-    --node_rank 1 \
-    --master_addr 33.93.186.11 \
+    --nnodes 3 \
+    --node_rank 0 \
+    --master_addr 33.117.214.244 \
     --master_port 23456
 "
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 16 \
-    --num-layers 24 \
-    --hidden-size 3072 \
-    --num-attention-heads 16 \
+    --pipeline-model-parallel-size 24 \
+    --num-layers 32 \
+    --hidden-size 4096 \
+    --num-attention-heads 32 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
-    --micro-batch-size 8 \
-    --global-batch-size 512 \
+    --micro-batch-size 16 \
+    --global-batch-size 528 \
     --lr 0.00015 \
     --train-iters 1000 \
     --lr-decay-iters 320000 \
@@ -56,7 +56,7 @@ DATA_ARGS="
 "
 
 OUTPUT_ARGS="
-    --log-interval 10 \
+    --log-interval 1 \
     --save-interval 10000 \
     --eval-interval 1000 \
     --eval-iters 10

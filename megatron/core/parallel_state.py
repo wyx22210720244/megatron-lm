@@ -24,7 +24,7 @@ _POSITION_EMBEDDING_GROUP = {}
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = {}
 _DATA_PARALLEL_IDX = 0
-_DATA_PARALLEL_GROUP_GLOO = None
+# _DATA_PARALLEL_GROUP_GLOO = None
 # tensor model parallel group and data parallel group combined
 # used for fp8 and moe training
 _TENSOR_AND_DATA_PARALLEL_GROUP = None
@@ -84,6 +84,7 @@ _GLOBAL_MEMORY_BUFFER = None
 
 _CURRENT_RANK_START_LAYER = None
 _CURRENT_RANK_END_LAYER = None
+_INDEPENDENT_TP = None
 
 
 def get_nccl_options(pg_name, nccl_comm_cfgs):
@@ -118,9 +119,14 @@ def initialize_model_parallel(
     """Initialize model data parallel groups.
 
     """
+    global _INDEPENDENT_TP
     args = get_args()
     layer_allocation = json.load(open("layers.json"))
     group_allocation = json.load(open("allocations.json"))
+    # 判断是否有DP组中没有PP
+    for key, value in group_allocation.items():
+        if len(value) == 1 and isinstance(value,(int,float,list)):
+            _INDEPENDENT_TP = True
     # Get world size and rank. Ensure some consistencies.
     assert torch.distributed.is_initialized()
     world_size: int = torch.distributed.get_world_size()
@@ -187,11 +193,11 @@ def initialize_model_parallel(
     # Build the data-parallel groups.
     global _DATA_PARALLEL_GROUP
     global _DATA_PARALLEL_IDX
-    global _DATA_PARALLEL_GROUP_GLOO
+    # global _DATA_PARALLEL_GROUP_GLOO
     global _DATA_PARALLEL_GLOBAL_RANKS
     global _DATA_PARALLEL_GLOBAL_LAYERS
     global _DATA_PARALLEL_GROUP_WITH_CP
-    global _DATA_PARALLEL_GROUP_WITH_CP_GLOO
+    # global _DATA_PARALLEL_GROUP_WITH_CP_GLOO
     global _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP
     global _DATA_PARALLEL_NUM_LAYER
     global _DATA_PARALLEL_OFFSETS
@@ -326,14 +332,14 @@ def initialize_model_parallel(
             group = torch.distributed.new_group(
                 ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
             )
-            #group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+            # group_gloo = torch.distributed.new_group(ranks, backend="gloo")
             if rank in ranks:
                 _DATA_PARALLEL_GROUP[_DATA_PARALLEL_IDX] = group
-                #_DATA_PARALLEL_GROUP_GLOO = group_gloo
+                # _DATA_PARALLEL_GROUP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS[_DATA_PARALLEL_IDX] = ranks
                 _DATA_PARALLEL_GLOBAL_LAYERS[_DATA_PARALLEL_IDX] = int(dp_layer_comm[dp_group])
                 _DATA_PARALLEL_GROUP_WITH_CP = group
-                #_DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
+                # _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks
                 _DATA_PARALLEL_IDX += 1
 
@@ -805,10 +811,10 @@ def initialize_model_parallel_origin(
             group = torch.distributed.new_group(
                 ranks, pg_options=get_nccl_options('dp', nccl_comm_cfgs)
             )
-            #group_gloo = torch.distributed.new_group(ranks, backend="gloo")
+            # group_gloo = torch.distributed.new_group(ranks, backend="gloo")
             if rank in ranks:
                 _DATA_PARALLEL_GROUP = group
-                #_DATA_PARALLEL_GROUP_GLOO = group_gloo
+                # _DATA_PARALLEL_GROUP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS = ranks
         for j in range(tensor_model_parallel_size):
             ranks_with_cp = range(start_rank + j, end_rank, tensor_model_parallel_size)
@@ -816,10 +822,10 @@ def initialize_model_parallel_origin(
             group_with_cp = torch.distributed.new_group(
                 ranks_with_cp, pg_options=get_nccl_options('dp_cp', nccl_comm_cfgs)
             )
-            #group_with_cp_gloo = torch.distributed.new_group(ranks_with_cp, backend="gloo")
+            # group_with_cp_gloo = torch.distributed.new_group(ranks_with_cp, backend="gloo")
             if rank in ranks_with_cp:
                 _DATA_PARALLEL_GROUP_WITH_CP = group_with_cp
-                #_DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_with_cp_gloo
+                # _DATA_PARALLEL_GROUP_WITH_CP_GLOO = group_with_cp_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS_WITH_CP = ranks_with_cp
 
     # Apply SHARP to DP process groups
@@ -1668,3 +1674,7 @@ def get_current_rank_start_layer():
 def get_current_rank_end_layer():
     global _CURRENT_RANK_END_LAYER
     return int(_CURRENT_RANK_END_LAYER)
+
+def is_independent_tp():
+    global _INDEPENDENT_TP
+    return _INDEPENDENT_TP

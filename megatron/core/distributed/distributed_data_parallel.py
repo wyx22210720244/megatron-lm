@@ -94,6 +94,7 @@ class DistributedDataParallel(MegatronModule):
         # The grad buffer under the hood creates buckets as appropriate based on bucket_size.
         self.data_parallel_world_size = parallel_state.get_data_parallel_world_size()
         self.param_numel_count = {"embedding_weight": 0,
+                                  "word_embeddings": 0,
                                   "layer_weight": 0,
                                   "final_norm": 0,
                                   "final_word_embedding": 0,
@@ -121,6 +122,7 @@ class DistributedDataParallel(MegatronModule):
         for name, param in self.module.named_parameters():
             if 'embedding.word_embeddings' in name:
                 self.param_numel_count["embedding_weight"] += param.numel()
+                self.param_numel_count["word_embeddings"] += param.numel()
             elif 'embedding.position_embeddings' in name:
                 self.param_numel_count["embedding_weight"] += param.numel()
             elif "layers.0" in name:

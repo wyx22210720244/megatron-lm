@@ -117,10 +117,32 @@ class Bucket:
                         self.data[start_index:end_index], group=group, async_op=self.overlap_grad_reduce
                     )
                     start_index = end_index
+                    # 当DP组中只有tensor并行时
+                    # 该组中没有final—word-embedding
+                    # 与其他组all-reduce时需要补全
+                    if parallel_state.is_pipeline_last_stage() and idx == len(data_parallel_group) - 1:
+                        #print(f"当前rank是{torch.distributed.get_rank()},正在进行补全=====")
+                        #print(f"长度是{len(self.data[:self.param_numel_count['word_embeddings']])}")
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[:self.param_numel_count["word_embeddings"]], group=group, async_op=self.overlap_grad_reduce
+                        )
         elif parallel_state.is_pipeline_last_stage():
             for idx, group in data_parallel_group.items():
                 if idx == len(data_parallel_group) - 1:
-                    self.communication_handle = torch.distributed.all_reduce(
+                    if parallel_state.is_independent_tp():
+                        #print(f"当前rank是{torch.distributed.get_rank()},正在进行补全=====")
+                        #print(f"start_idx={start_index}")
+                        #print(f"data={len(self.data)}")
+                        #print(f"word_embedding_start={len(self.data)-self.param_numel_count['final_word_embedding']}")
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[start_index:len(self.data)-self.param_numel_count["final_word_embedding"]], group=group, async_op=self.overlap_grad_reduce
+                        )
+                        self.communication_handle = torch.distributed.all_reduce(
+                            self.data[len(self.data) - self.param_numel_count["final_word_embedding"]:],
+                            group=group, async_op=self.overlap_grad_reduce
+                        )
+                    else:
+                        self.communication_handle = torch.distributed.all_reduce(
                         self.data[start_index:], group=group, async_op=self.overlap_grad_reduce
                     )
                 else:

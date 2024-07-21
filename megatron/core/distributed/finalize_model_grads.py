@@ -148,7 +148,7 @@ def finalize_model_grads(model: List[torch.nn.Module]):
         model_chunk.finish_grad_sync()
     if config.timers is not None:
         config.timers('all-grads-sync').stop()
-    # print("rank is {} finish dp grad sync".format(torch.distributed.get_rank()))
+    print("rank is {} finish dp grad sync".format(torch.distributed.get_rank()))
     # All-reduce layer-norm grads (for sequence parallelism).
     if config.timers is not None:
         config.timers('layernorm-grads-all-reduce', log_level=1).start(
