@@ -18,25 +18,26 @@ CHECKPOINT_PATH=/root/Megatron-LM/checkpoints/gpt2 #自定义ckp路径
 VOCAB_FILE=/root/Megatron-LM/data/gpt2-vocab.json
 MERGE_FILE=/root/Megatron-LM/data/gpt2-merges.txt
 DATA_PATH=/root/Megatron-LM/data/meg-gpt2-oscar-en-10k_text_document
-
+REMOTE_PATH=/root/megatron-lm/checkpoints/gpt2
+LOCAL_PATH=/root/Megatron-LM/checkpoints/gpt2
 DISTRIBUTED_ARGS="
     --nproc_per_node $GPUS_PER_NODE \
-    --nnodes 3 \
-    --node_rank 0 \
-    --master_addr 33.117.214.244 \
+    --nnodes 2 \
+    --node_rank 1 \
+    --master_addr 33.123.210.210 \
     --master_port 23456
 "
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size 24 \
-    --num-layers 32 \
-    --hidden-size 4096 \
+    --pipeline-model-parallel-size 16 \
+    --num-layers 24 \
+    --hidden-size 2048 \
     --num-attention-heads 32 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
     --micro-batch-size 16 \
-    --global-batch-size 528 \
+    --global-batch-size 512 \
     --lr 0.00015 \
     --train-iters 1000 \
     --lr-decay-iters 320000 \
@@ -57,7 +58,7 @@ DATA_ARGS="
 
 OUTPUT_ARGS="
     --log-interval 1 \
-    --save-interval 10000 \
+    --save-interval 20 \
     --eval-interval 1000 \
     --eval-iters 10
 "
@@ -66,4 +67,7 @@ torchrun $DISTRIBUTED_ARGS /root/dp/megatron-lm/pretrain_gpt.py \
     $GPT_ARGS \
     $DATA_ARGS \
     $OUTPUT_ARGS \
-    --distributed-backend nccl
+    --distributed-backend nccl \
+    --save \
+    --save-remote-path $REMOTE_PATH \
+    --save-local-path $LOCAL_PATH

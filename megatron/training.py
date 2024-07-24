@@ -8,7 +8,7 @@ import math
 import logging
 import sys
 
-#import redislite
+import redislite
 
 from .log_handler import CustomHandler
 # Make default logging level INFO, but filter out all log messages not from MCore.
@@ -53,8 +53,8 @@ from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 from megatron.model.vision.knn_monitor import compute_feature_bank
 import threading
-#from veturbo.utils import distribute_file_rdma,RDMADistConfig
-#import socket
+from veturbo.utils import distribute_file_rdma,RDMADistConfig
+import socket
 
 
 def print_datetime(string):
